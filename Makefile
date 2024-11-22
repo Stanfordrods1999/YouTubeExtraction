@@ -13,7 +13,7 @@ all: install
 
 # Create a virtual environment and install dependencies
 $(VENV_DIR):
-	$(PYTHON) -m venv $(VENV_DIR)
+	$ python -m venv $(VENV_DIR)
 	$(VENV_DIR)/bin/pip install --upgrade pip
 
 install: $(VENV_DIR)

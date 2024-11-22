@@ -14,6 +14,26 @@ from seleniumbase import Driver
 
 log = Logging(os.path.splitext(os.path.basename(__file__))[0])
 
+import os
+from seleniumbase import Driver
+
+def initialize_driver():
+    """
+    Initialize the SeleniumBase Driver with dynamically determined paths.
+    Uses environment variables set by the Makefile for ChromeDriver configuration.
+    """
+    # Get the ChromeDriver path from the environment variable
+    chrome_driver_path = os.getenv("SELENIUMBASE_CHROME_DRIVER")
+    if not chrome_driver_path:
+        raise EnvironmentError("ChromeDriver path is not set. Ensure SELENIUMBASE_CHROME_DRIVER is configured.")
+
+    # Initialize the SeleniumBase Driver
+    driver = Driver(
+        incognito=True,  # Open browser in incognito mode
+        uc=True,         # Use undetected Chrome for bot prevention
+        multi_proxy=True # Enable multiple proxy support
+    )
+    return driver
 
  
 class SeleniumThreadPoolExecutor:
@@ -59,6 +79,7 @@ class SeleniumThreadPoolExecutor:
         self.func = callable_kwargs.pop('func')
         #print(callable_kwargs.pop('func'))
         self.func_kwargs = callable_kwargs
+        self.driver = initialize_driver()
         
         
     def selenium_queue_listener(self,data_queue: mp.Queue, worker_queue: mp.Queue, selenium_workers: dict):
@@ -127,9 +148,8 @@ class SeleniumThreadPoolExecutor:
             else:
                 raise ValueError("max_cpu_usage is set to False, please provide max_cpu_count.")
         
-        
         # Create a dictionary to map worker IDs to Selenium instances
-        selenium_workers = {i: Driver(incognito=True,uc=True,multi_proxy=True) for i in worker_ids}
+        selenium_workers = {i: self.driver for i in worker_ids}
         
         for worker_id in worker_ids:
             worker_data_queue.put(worker_id)

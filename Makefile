@@ -1,37 +1,76 @@
 # Variables
-PYTHON = python3
+PYTHON = python3.12
 VENV_DIR = .venv
-ACTIVATE = source $(VENV_DIR)/bin/activate
-SRC_DIR = src
-TEST_DIR = tests
-REQ_FILE = requirements.txt
+CHROME_DRIVER_DIR = $(VENV_DIR)/bin
+SELENIUMBASE_DRIVER_DIR = $(VENV_DIR)/lib/$(PYTHON)/site-packages/seleniumbase/drivers
+CHROME_DRIVER_PATH = $(CHROME_DRIVER_DIR)/chromedriver
+CLI_TOOL = ScrapeRun
 
-.PHONY: all install test lint clean run
+.PHONY: all install install-chromedriver set-env test lint run-scraper clean
 
 # Default target
-all: install lint test run
+all: install
 
 # Create a virtual environment and install dependencies
 $(VENV_DIR):
 	$(PYTHON) -m venv $(VENV_DIR)
-	$(ACTIVATE) && pip install --upgrade pip
+	$(VENV_DIR)/bin/pip install --upgrade pip
 
 install: $(VENV_DIR)
-	$(ACTIVATE) && pip install -r $(REQ_FILE)
+	$(VENV_DIR)/bin/pip install -r requirements.txt
+
+# Install Google Chrome
+install-chrome:
+	@echo "Installing Google Chrome..."
+	@if [ `uname` = "Linux" ]; then \
+		wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O chrome.deb; \
+		sudo apt-get update; \
+		sudo apt-get install -y fonts-liberation libvulkan1 xdg-utils; \
+		sudo dpkg -i chrome.deb || sudo apt-get install -f -y; \
+		rm -f chrome.deb; \
+	elif [ `uname` = "Darwin" ]; then \
+		echo "Please install Chrome manually on macOS."; \
+	else \
+		echo "Please install Chrome manually on Windows."; \
+	fi
+
+# Install ChromeDriver
+install-chromedriver:
+	@echo "Installing ChromeDriver via SeleniumBase..."
+	$(VENV_DIR)/bin/pip install seleniumbase
+	$(VENV_DIR)/bin/sbase install chromedriver
+	@echo "Detecting ChromeDriver path..."
+	CHROME_DRIVER_PATH=`find $(SELENIUMBASE_DRIVER_DIR) -name chromedriver | head -n 1`; \
+	if [ -z "$$CHROME_DRIVER_PATH" ]; then \
+		echo "ChromeDriver not found! Please ensure it is installed."; \
+	else \
+		echo "ChromeDriver installed at: $$CHROME_DRIVER_PATH"; \
+		ln -sf $$CHROME_DRIVER_PATH $(CHROME_DRIVER_DIR)/chromedriver; \
+	fi
 
 # Run tests using pytest
 test:
-	$(ACTIVATE) && pytest $(TEST_DIR)
+	$(VENV_DIR)/bin/pytest tests
 
 # Lint the code using flake8
 lint:
-	$(ACTIVATE) && flake8 $(SRC_DIR) $(TEST_DIR)
+	$(VENV_DIR)/bin/flake8 src tests
 
-# Run the application
-run:
-	$(ACTIVATE) && $(PYTHON) -m $(SRC_DIR).main
+# Run the ScrapeRun CLI tool
+run-scraper:
+	SELENIUMBASE_CHROME_DRIVER=$(CHROME_DRIVER_PATH) \
+	SELENIUMBASE_HEADLESS="False" \
+	$(VENV_DIR)/bin/python $(CLI_TOOL).py run-executor \
+		--queries "Read Dead Redemption" \
+		--queries "God of War 2" \
+		--queries "Mortal Kombat" \
+		--queries "The Last of Us" \
+		--queries "Yhwach vs Aizen" \
+		--queries "Ichigo vs Aizen" \
+		--queries "Aizen is the best" \
+		--max-cpu-count 4 --max-cpu-usage
 
-# Clean up temporary files
+# Clean up temporary files and virtual environment
 clean:
 	find . -type f -name '*.pyc' -delete
 	find . -type d -name '__pycache__' -delete
@@ -40,13 +79,3 @@ clean:
 	rm -rf .mypy_cache
 	rm -rf .coverage
 	rm -rf htmlcov
-
-# Additional help target
-help:
-	@echo "Usage:"
-	@echo "  make install   - Create virtual environment and install dependencies"
-	@echo "  make test      - Run tests"
-	@echo "  make lint      - Lint the code with flake8"
-	@echo "  make run       - Run the application"
-	@echo "  make clean     - Clean up temporary files"
-	@echo "  make help      - Show this help message"

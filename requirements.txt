@@ -1,2 +1,18 @@
-seleniumbase == 4.32.12
-selenium == 4.26.1
+# Selenium and SeleniumBase
+seleniumbase==4.32.12
+selenium==4.26.1
+
+# Click library for CLI tools
+click>=8.0.0
+
+# Testing framework
+pytest>=7.0.0
+
+# Code quality tools
+flake8>=6.0.0
+flake8-bugbear>=23.0.0  # Optional: Additional bug checks for flake8
+flake8-docstrings>=1.7.0  # Optional: Checks for docstring conventions
+
+# Optional: Other useful pytest plugins
+pytest-cov>=4.0.0  # For coverage reporting
+pytest-mock>=3.10.0  # For mocking in pytest

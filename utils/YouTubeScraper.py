@@ -1,6 +1,7 @@
 from seleniumbase import Driver
 from selenium.webdriver.common.by import By
 import time
+import json
 
 
 class YouTubeScraper:
@@ -64,4 +65,5 @@ class YouTubeScraper:
         time.sleep(3)  # Wait for the results to load
         self.scroll_and_load()
         self.collect_video_data()
-        return self.records
+        with open(f"./{self.search_query}_scrape.json", mode="w") as json_file:
+            json.dump(self.records, json_file, indent=4)

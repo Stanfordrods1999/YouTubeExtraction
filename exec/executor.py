@@ -127,7 +127,6 @@ class SeleniumThreadPoolExecutor:
             else:
                 raise ValueError("max_cpu_usage is set to False, please provide max_cpu_count.")
         
-        
         # Create a dictionary to map worker IDs to Selenium instances
         selenium_workers = {i: Driver(incognito=True,uc=True,multi_proxy=True) for i in worker_ids}
         

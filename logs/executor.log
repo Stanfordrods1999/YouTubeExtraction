@@ -1,0 +1,79 @@
+INFO:logs.Logging:Got the video ID Read Dead Redemption on the data queue
+INFO:logs.Logging:Got the video ID God of War 2 on the data queue
+INFO:logs.Logging:0
+INFO:logs.Logging:1
+INFO:logs.Logging:Got the video ID Mortal Kombat on the data queue
+INFO:logs.Logging:Got the video ID The Last of Us on the data queue
+INFO:logs.Logging:2
+INFO:logs.Logging:3
+INFO:logs.Logging:Got the video ID Yhwach vs Aizen on the data queue
+INFO:logs.Logging:Got the video ID Ichigo vs Aizen on the data queue
+INFO:logs.Logging:Got the video ID Aizen is the best on the data queue
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+INFO:logs.Logging:4
+INFO:logs.Logging:5
+INFO:logs.Logging:6
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+INFO:logs.Logging:Got the processing data Read Dead Redemption on the data queue
+INFO:logs.Logging:0
+INFO:logs.Logging:Got the processing data God of War 2 on the data queue
+INFO:logs.Logging:1
+INFO:logs.Logging:Got the processing data The Last of Us on the data queue
+INFO:logs.Logging:Got the processing data Mortal Kombat on the data queue
+INFO:logs.Logging:3
+INFO:logs.Logging:Got the processing data Yhwach vs Aizen on the data queue
+INFO:logs.Logging:Got the processing data Ichigo vs Aizen on the data queue
+INFO:logs.Logging:2
+INFO:logs.Logging:Got the processing data Aizen is the best on the data queue
+INFO:logs.Logging:6
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+INFO:logs.Logging:5
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+INFO:logs.Logging:4
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+INFO:logs.Logging:Got the processing data Read Dead Redemption on the data queue
+INFO:logs.Logging:Got the processing data God of War 2 on the data queue
+INFO:logs.Logging:Got the processing data Mortal Kombat on the data queue
+INFO:logs.Logging:0
+INFO:logs.Logging:1
+INFO:logs.Logging:2
+INFO:logs.Logging:Got the processing data The Last of Us on the data queue
+INFO:logs.Logging:0
+INFO:logs.Logging:Got the processing data Yhwach vs Aizen on the data queue
+INFO:logs.Logging:1
+INFO:logs.Logging:Got the processing data Ichigo vs Aizen on the data queue
+INFO:logs.Logging:2
+INFO:logs.Logging:Got the processing data Aizen is the best on the data queue
+INFO:logs.Logging:0
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+INFO:logs.Logging:Got the processing data Read Dead Redemption on the data queue
+INFO:logs.Logging:0
+INFO:logs.Logging:Got the processing data Mortal Kombat on the data queue
+INFO:logs.Logging:Got the processing data God of War 2 on the data queue
+INFO:logs.Logging:1
+INFO:logs.Logging:2
+INFO:logs.Logging:Got the processing data The Last of Us on the data queue
+INFO:logs.Logging:0
+INFO:logs.Logging:Got the processing data Yhwach vs Aizen on the data queue
+INFO:logs.Logging:2
+INFO:logs.Logging:Got the processing data Ichigo vs Aizen on the data queue
+INFO:logs.Logging:1
+INFO:logs.Logging:Got the processing data Aizen is the best on the data queue
+INFO:logs.Logging:2
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread
+WARNING:logs.Logging:STOP encountered, kill the worker thread

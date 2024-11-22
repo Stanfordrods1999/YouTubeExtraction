@@ -1,5 +1,9 @@
 TEST.ipynb
 
+__pycache__/
+
+*.log
+
 downloaded_files/
 
 env/

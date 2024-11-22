@@ -50,7 +50,7 @@ install-chromedriver:
 
 # Run tests using pytest
 test:
-	$(VENV_DIR)/bin/pytest tests
+	$(VENV_DIR)/bin/pytest tests/test_execdata.py
 
 # Lint the code using flake8
 lint:

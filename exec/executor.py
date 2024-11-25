@@ -77,9 +77,9 @@ class SeleniumThreadPoolExecutor:
         self.lock  = Lock()
         self.flag = True
         self.func = callable_kwargs.pop('func')
-        #print(callable_kwargs.pop('func'))
         self.func_kwargs = callable_kwargs
-        self.driver = initialize_driver()
+        ## Keep initializion reference here, if we call here, all workers will point to one driver
+        self.driver = initialize_driver
         
         
     def selenium_queue_listener(self,data_queue: mp.Queue, worker_queue: mp.Queue, selenium_workers: dict):
@@ -149,7 +149,7 @@ class SeleniumThreadPoolExecutor:
                 raise ValueError("max_cpu_usage is set to False, please provide max_cpu_count.")
         
         # Create a dictionary to map worker IDs to Selenium instances
-        selenium_workers = {i: self.driver for i in worker_ids}
+        selenium_workers = {i: self.driver() for i in worker_ids}
         
         for worker_id in worker_ids:
             worker_data_queue.put(worker_id)

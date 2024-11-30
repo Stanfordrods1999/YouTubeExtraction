@@ -19,22 +19,20 @@ class YouTubeScraper:
         """
         self.search_query = _data
         self.driver = driver
-        self.wait = WebDriverWait(self.driver,10)
+        self.wait = WebDriverWait(self.driver,20)
         self.scroll_attempts = scroll_attempts
         self.scroll_pause = scroll_pause
         self.records = []
 
     def open_youtube(self):
         """Opens the YouTube homepage."""
-        self.driver.get('https://www.youtube.com/')
+        query_string = '+'.join(self.search_query.split())
+        self.driver.get(f'https://www.youtube.com/results?search_query={query_string}')
         time.sleep(5)
 
     def search(self):
         """Performs a search for the specified query on YouTube."""
-        search_box = self.driver.find_element(By.XPATH, '//input[@id="search"]')
-        search_box.send_keys(self.search_query)
-        search_button = self.driver.find_element(By.XPATH, '//button[@id="search-icon-legacy"]')
-        search_button.click()
+        
 
     def scroll_and_load(self):
         """Scrolls the page to load more results."""
@@ -56,12 +54,13 @@ class YouTubeScraper:
         """Right now this is the easiest way to do it without needing to open the link"""
         aria_label = aria_label.replace(title+" by",'')
         aria_label  = aria_label.split(' ')
+        time = ""
         channel = ""
         views = ""
         for i in range(len(aria_label)):
             if(aria_label[i] == "views"):
                 views = aria_label[i-1]
-                channel = ' '.join(aria_label[:i-1])
+                channel = ''.join(aria_label[:i-1])
                 time = self.convert_relative_time_to_datetime(' '.join(aria_label[i+1:]))
                 break
         return {"YT_Channel":channel,"YT_Views":views,"YT_Time":time}    
@@ -130,6 +129,6 @@ class YouTubeScraper:
         self.search()
         time.sleep(3)  # Wait for the results to load
         self.scroll_and_load()
-        self.collect_video_data()
+        self.collect_video_data()       
         with open(f"./{self.search_query}_scrape.json", mode="w") as json_file:
             json.dump(self.records, json_file, indent=4)

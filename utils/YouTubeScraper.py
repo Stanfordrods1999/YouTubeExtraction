@@ -119,6 +119,24 @@ class YouTubeScraper:
             # Append the record to the records list
             self.records.append(record)
 
+    def extract_comments(self, video_url):
+        """Extracts comments from a specific video."""
+        self.driver.get(video_url)
+        time.sleep(3)
+
+        # Scroll to load comments
+        for _ in range(5):  # Scroll multiple times to load more comments
+            self.driver.execute_script("window.scrollBy(0, 1000);")
+            time.sleep(self.scroll_pause)
+
+        comments = []
+        comment_elements = self.driver.find_elements(By.XPATH, '//ytd-comment-thread-renderer//yt-formatted-string[@id="content-text"]')
+
+        for comment_elem in comment_elements:
+            comments.append(comment_elem.text)
+
+        return comments
+
     def scrape(self):
         """
         Executes the full scraping process: open YouTube, search, scroll, and collect data.
@@ -129,6 +147,11 @@ class YouTubeScraper:
         self.search()
         time.sleep(3)  # Wait for the results to load
         self.scroll_and_load()
-        self.collect_video_data()       
+        self.collect_video_data()  
+
+        # Extract comments for each video
+        # for record in self.records:
+        #    record["Comments"] = self.extract_comments(record["Link"])
+
         with open(f"./{self.search_query}_scrape.json", mode="w") as json_file:
             json.dump(self.records, json_file, indent=4)

@@ -1,7 +1,9 @@
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait 
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 import time
+from seleniumbase import Driver
 import json
 import re 
 from datetime import datetime, timedelta
@@ -9,7 +11,7 @@ from datetime import datetime, timedelta
 
 ## TODO: Create a WebDriverWait for soem fo the interactable elements 
 class YouTubeScraper:
-    def __init__(self, _data,driver,lock, scroll_attempts=3, scroll_pause=5):
+    def __init__(self, _data,driver:Driver,lock, scroll_attempts=3, scroll_pause=5):
         """
         Initializes the YouTubeScraper instance.
         
@@ -18,7 +20,7 @@ class YouTubeScraper:
         :param scroll_pause: Pause time (in seconds) between each scroll.
         """
         self.search_query = _data
-        self.driver = driver
+        self.driver:Driver = driver
         self.wait = WebDriverWait(self.driver,20)
         self.scroll_attempts = scroll_attempts
         self.scroll_pause = scroll_pause
@@ -126,11 +128,18 @@ class YouTubeScraper:
 
         # Scroll to load comments
         for _ in range(5):  # Scroll multiple times to load more comments
-            self.driver.execute_script("window.scrollBy(0, 1000);")
+            try:
+                element = self.wait.until(EC.presence_of_element_located((By.XPATH,"//div[@id='continuations']")))
+                self.driver.execute_script("""
+                    var element = arguments[0];
+                    element.scrollIntoView({behavior: 'smooth', block: 'center'});
+                """, element)
+            except TimeoutException:
+                pass
             time.sleep(self.scroll_pause)
 
         comments = []
-        comment_elements = self.driver.find_elements(By.XPATH, '//ytd-comment-thread-renderer//yt-formatted-string[@id="content-text"]')
+        comment_elements = self.driver.find_elements(By.XPATH, '//ytd-comment-thread-renderer//yt-attributed-string[@id="content-text"]')
 
         for comment_elem in comment_elements:
             comments.append(comment_elem.text)
@@ -150,8 +159,8 @@ class YouTubeScraper:
         self.collect_video_data()  
 
         # Extract comments for each video
-        # for record in self.records:
-        #    record["Comments"] = self.extract_comments(record["Link"])
+        for record in self.records:
+            record["Comments"] = self.extract_comments(record["Link"])
 
         with open(f"./{self.search_query}_scrape.json", mode="w") as json_file:
             json.dump(self.records, json_file, indent=4)

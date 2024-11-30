@@ -1,6 +1,7 @@
 import click
 import os
 import sys
+
 # Add the parent directory to PYTHONPATH
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -9,8 +10,6 @@ os.environ["SELENIUMBASE_HEADLESS"] = "False"
 
 from exec.executor import SeleniumThreadPoolExecutor
 from utils.YouTubeScraper import YouTubeScraper
-
-
 
 def test_run_executor():
     queries = ["Read Dead Redemption",
@@ -39,8 +38,13 @@ def test_run_executor():
     )
     
     print("Preparing process pool...")
-    executor.prepare_process_pool_and_implement()
+    #executor.prepare_process_pool_and_implement()
 
+    from seleniumbase import Driver
+
+    data = executor.callable("Red Dead Redemption", Driver(incognito = True, uc = True ,multi_proxy = False), executor.lock)
+
+    data.scrape()
+    
     assert executor.callable == None
-
     print("Execution completed.")

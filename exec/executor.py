@@ -82,7 +82,7 @@ class SeleniumThreadPoolExecutor:
         self.driver = initialize_driver
         
         
-    def selenium_queue_listener(self,data_queue: mp.Queue, worker_queue: mp.Queue, selenium_workers: dict):
+    def selenium_queue_listener(self,data_queue: mp.Queue, worker_queue: mp.Queue, result_queue:mp.Queue,selenium_workers: dict):
         """Listens to the Selenium data queue, assigns tasks to workers, and collects results.
 
         Args:
@@ -94,10 +94,8 @@ class SeleniumThreadPoolExecutor:
             None"""
         while True:
                     
-            # Get data and worker ID from the queues
             _data = data_queue.get()
             
-            # Check if the data queue is empty
             if _data == "STOP":
                 log.logger.warning("STOP encountered, kill the worker thread")
                 data_queue.put(_data)
@@ -106,16 +104,16 @@ class SeleniumThreadPoolExecutor:
                 log.logger.info(f"Got the processing data {_data} on the data queue")
             worker_id = worker_queue.get()
             log.logger.info(f"{worker_id}")
-            # Get the Selenium worker instance for the current task
+
             worker = selenium_workers[worker_id]
-            
             if self.class_ref:
                 class_instance = self.callable(_data = _data , driver=worker, lock=self.lock)
                 method = getattr(class_instance,self.func)
-                method()
+                result_queue.put(method())
                  
             else:
-                self.callable(_data = _data, driver=worker, lock=self.lock)
+                result_queue.put(self.callable(_data = _data, driver=worker, lock=self.lock))
+                
             # Put the worker back into the worker queue as it has completed its task
             worker_queue.put(worker_id)
         return 
@@ -137,6 +135,7 @@ class SeleniumThreadPoolExecutor:
         # Initialize queues for data communication
         selenium_data_queue = mp.Queue()
         worker_data_queue = mp.Queue()
+        result_data_queue = mp.Queue()
         
         if self.max_cpu_usage:
             # Use all available CPU cores
@@ -157,7 +156,7 @@ class SeleniumThreadPoolExecutor:
         
         # Create a list of threads for Selenium processing
         selenium_processes = [Thread(target=self.selenium_queue_listener,
-                                    args=(selenium_data_queue, worker_data_queue, selenium_workers)) for _ in worker_ids]
+                                    args=(selenium_data_queue, worker_data_queue,result_data_queue,selenium_workers)) for _ in worker_ids]
         
         # Start the Selenium processing threads
         for p in selenium_processes:
@@ -171,7 +170,13 @@ class SeleniumThreadPoolExecutor:
         # Wait for all threads to complete
         for p in selenium_processes:
             p.join()
-        
+
+        results =[]
+        while not result_data_queue.empty():
+            results.append(result_data_queue.get())
+
         # Quit the Selenium instance
         for workers in selenium_workers.values():
             workers.quit()
+        
+        return results

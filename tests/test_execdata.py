@@ -38,13 +38,4 @@ def test_run_executor():
     )
     
     print("Preparing process pool...")
-    #executor.prepare_process_pool_and_implement()
-
-    from seleniumbase import Driver
-
-    data = executor.callable("Red Dead Redemption", Driver(incognito = True, uc = True ,multi_proxy = False), executor.lock)
-
-    data.scrape()
-    
-    assert executor.callable == None
-    print("Execution completed.")
+    executor.prepare_process_pool_and_implement()

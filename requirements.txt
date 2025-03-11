@@ -16,3 +16,7 @@ flake8-docstrings>=1.7.0  # Optional: Checks for docstring conventions
 # Optional: Other useful pytest plugins
 pytest-cov>=4.0.0  # For coverage reporting
 pytest-mock>=3.10.0  # For mocking in pytest
+# Needed to use Google API Services
+google-api-python-client 
+google-auth-httplib2 
+google-auth-oauthlib

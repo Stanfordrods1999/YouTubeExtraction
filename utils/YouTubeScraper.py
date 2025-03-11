@@ -5,6 +5,7 @@ from selenium.common.exceptions import TimeoutException
 import time
 from seleniumbase import Driver
 import json
+import requests
 import re 
 from datetime import datetime, timedelta
 
@@ -120,7 +121,7 @@ class YouTubeScraper:
             
             # Append the record to the records list
             self.records.append(record)
-
+    ## TODO: Have a way to exteract comments from shorts as well
     def extract_comments(self, video_url):
         """Extracts comments from a specific video."""
         self.driver.get(video_url)
@@ -159,8 +160,9 @@ class YouTubeScraper:
         self.collect_video_data()  
 
         # Extract comments for each video
+        # Create the api to enter records as a whole 
         for record in self.records:
             record["Comments"] = self.extract_comments(record["Link"])
-
-        with open(f"./{self.search_query}_scrape.json", mode="w") as json_file:
-            json.dump(self.records, json_file, indent=4)
+            requests.post('https://fa4b-49-47-0-104.ngrok-free.app/insert-data/',
+                      json = record)        
+        

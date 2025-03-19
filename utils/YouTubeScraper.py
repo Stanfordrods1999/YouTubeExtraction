@@ -163,6 +163,6 @@ class YouTubeScraper:
         # Create the api to enter records as a whole 
         for record in self.records:
             record["Comments"] = self.extract_comments(record["Link"])
-            requests.post('https://fa4b-49-47-0-104.ngrok-free.app/insert-data/',
+            requests.post('https://able-extremely-boa.ngrok-free.app/insert-data/',
                       json = record)        
         

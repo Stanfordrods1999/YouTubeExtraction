@@ -64,7 +64,7 @@ run-scraper:
 	--queries "Trending news worldwide today" \
 	--queries "Latest viral videos 2025" \
 	--queries "Top trending topics this week" \
-	--queries "YouTube trending videos [your country]" \
+	--queries "India trending videos" \
 	--queries "Latest AI breakthroughs 2025" \
 	--queries "Top programming languages 2025" \
 	--queries "Best AI tools for developers" \

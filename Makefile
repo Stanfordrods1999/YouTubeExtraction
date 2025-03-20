@@ -103,7 +103,7 @@ run-scraper:
 	--queries "Underrated Indian movies 2025" \
 	--queries "Top Indian horror movies 2025" \
 	--queries "Best Indian comedy movies" \
-	--max-cpu-count 8 --max-cpu-usage False
+	--max-cpu-count 8
 
 # Clean up temporary files and virtual environment
 clean:

@@ -125,27 +125,43 @@ class YouTubeScraper:
     def extract_comments(self, video_url):
         """Extracts comments from a specific video."""
         self.driver.get(video_url)
-        time.sleep(3)
-
-        # Scroll to load comments
-        for _ in range(5):  # Scroll multiple times to load more comments
-            try:
-                element = self.wait.until(EC.presence_of_element_located((By.XPATH,"//div[@id='continuations']")))
-                self.driver.execute_script("""
-                    var element = arguments[0];
-                    element.scrollIntoView({behavior: 'smooth', block: 'center'});
-                """, element)
-            except TimeoutException:
-                pass
-            time.sleep(self.scroll_pause)
-
         comments = []
-        comment_elements = self.driver.find_elements(By.XPATH, '//ytd-comment-thread-renderer//yt-attributed-string[@id="content-text"]')
+        time.sleep(3)
+        if(re.search(r'/shorts/',video_url)):
+            self.driver.find_element(By.XPATH,"//div[@id='comments-button']").click()
+            time.sleep(3)
+            
+            for _ in range(5):
+                element = self.wait.until(EC.presence_of_element_located((By.XPATH,"//ytd-continuation-item-renderer[@class='style-scope ytd-item-section-renderer']")))
+                self.driver.execute_script("""
+                                var element = arguments[0];
+                                element.scrollIntoView({behavior: 'smooth', block: 'center'});
+                            """, element)
+                time.sleep(3)
 
-        for comment_elem in comment_elements:
-            comments.append(comment_elem.text)
+            comment_elements = self.driver.find_elements(By.XPATH,"//ytd-comment-view-model[@id='comment']//div[@id='content']")
+            comments = [X.text for X in comment_elements]
 
-        return comments
+            return comments 
+        else:
+            # Scroll to load comments
+            for _ in range(5):  # Scroll multiple times to load more comments
+                try:
+                    element = self.wait.until(EC.presence_of_element_located((By.XPATH,"//div[@id='continuations']")))
+                    self.driver.execute_script("""
+                        var element = arguments[0];
+                        element.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    """, element)
+                except TimeoutException:
+                    pass
+                time.sleep(self.scroll_pause)
+
+            comment_elements = self.driver.find_elements(By.XPATH, '//ytd-comment-thread-renderer//yt-attributed-string[@id="content-text"]')
+
+            for comment_elem in comment_elements:
+                comments.append(comment_elem.text)
+
+            return comments
 
     def scrape(self):
         """

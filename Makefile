@@ -61,30 +61,8 @@ run-scraper:
 	SELENIUMBASE_CHROME_DRIVER=$(CHROME_DRIVER_PATH) \
 	SELENIUMBASE_HEADLESS="False" \
 	$(VENV_DIR)/bin/python $(CLI_TOOL).py run-executor \
-	--queries "Trending news worldwide today" \
-	--queries "Latest viral videos 2025" \
-	--queries "Top trending topics this week" \
-	--queries "India trending videos" \
-	--queries "Latest AI breakthroughs 2025" \
-	--queries "Top programming languages 2025" \
-	--queries "Best AI tools for developers" \
-	--queries "Machine learning trends this year" \
-	--queries "Top upcoming games 2025" \
-	--queries "Best indie games of the year" \
-	--queries "Most popular gaming trends 2025" \
-	--queries "Trending gaming news today" \
-	--queries "Stock market updates today" \
-	--queries "Latest crypto news 2025" \
-	--queries "Business trends 2025" \
-	--queries "Best investments this year" \
-	--queries "Top universities for machine learning" \
-	--queries "Best certifications for tech jobs 2025" \
-	--queries "Highest paying tech jobs this year" \
-	--queries "Best strategies for getting into top colleges" \
-	--queries "Aurangzeb history documentary" \
-	--queries "Shivaji vs Aurangzeb real story" \
-	--queries "Mughal Empire in 17th century" \
-	--queries "Historical battles of the Mughal era"
+	--queries "Most anticipated games of 2025" \
+	--queries "Best open-world games 2025" \
 	--max-cpu-count 8
 
 # Clean up temporary files and virtual environment

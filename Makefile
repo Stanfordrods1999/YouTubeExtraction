@@ -61,9 +61,49 @@ run-scraper:
 	SELENIUMBASE_CHROME_DRIVER=$(CHROME_DRIVER_PATH) \
 	SELENIUMBASE_HEADLESS="False" \
 	$(VENV_DIR)/bin/python $(CLI_TOOL).py run-executor \
-	--queries "Most anticipated games of 2025" \
-	--queries "Best open-world games 2025" \
-	--max-cpu-count 8
+	--queries "Latest Bollywood news today" \
+	--queries "Upcoming Indian movies 2025" \
+	--queries "Top South Indian movies this year" \
+	--queries "Best Hindi web series 2025" \
+	--queries "Trending Bollywood songs 2025" \
+	--queries "Best Indian rap songs this year" \
+	--queries "Latest cricket updates India" \
+	--queries "IPL 2025 latest news" \
+	--queries "Top Indian gaming YouTubers" \
+	--queries "Most popular Indian streamers 2025" \
+	--queries "Best Indian PC games" \
+	--queries "Upcoming Indian gaming tournaments" \
+	--queries "Indian historical documentaries" \
+	--queries "Mughal Empire history in Hindi" \
+	--queries "Shivaji Maharaj full history" \
+	--queries "Ancient Indian warfare techniques" \
+	--queries "Latest Indian tech startups" \
+	--queries "Best Indian smartphones 2025" \
+	--queries "Latest budget phones in India" \
+	--queries "India’s space mission updates" \
+	--queries "ISRO upcoming missions" \
+	--queries "Most viral Indian memes" \
+	--queries "Trending Indian Instagram reels" \
+	--queries "Best Indian stand-up comedians" \
+	--queries "Latest political news India" \
+	--queries "Top Indian stock market trends" \
+	--queries "Best investment options in India 2025" \
+	--queries "Top government job exams 2025" \
+	--queries "Best engineering colleges in India" \
+	--queries "Best MBA colleges in India 2025" \
+	--queries "How to get a job in India 2025" \
+	--queries "Indian eSports scene 2025" \
+	--queries "Best Indian AI startups" \
+	--queries "Top tech jobs in India 2025" \
+	--queries "Best Indian coding bootcamps" \
+	--queries "Best Indian historical podcasts" \
+	--queries "Latest mythological TV shows India" \
+	--queries "Indian history facts you didn't know" \
+	--queries "Best Indian war movies" \
+	--queries "Underrated Indian movies 2025" \
+	--queries "Top Indian horror movies 2025" \
+	--queries "Best Indian comedy movies" \
+	--max-cpu-count 8 --max-cpu-usage False
 
 # Clean up temporary files and virtual environment
 clean:

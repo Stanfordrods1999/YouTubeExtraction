@@ -131,13 +131,13 @@ class YouTubeScraper:
             self.driver.find_element(By.XPATH,"//div[@id='comments-button']").click()
             time.sleep(3)
             
-            for _ in range(5):
+            for _ in range(10):
                 element = self.wait.until(EC.presence_of_element_located((By.XPATH,"//ytd-continuation-item-renderer[@class='style-scope ytd-item-section-renderer']")))
                 self.driver.execute_script("""
                                 var element = arguments[0];
                                 element.scrollIntoView({behavior: 'smooth', block: 'center'});
                             """, element)
-                time.sleep(3)
+                time.sleep(self.scroll_pause)
 
             comment_elements = self.driver.find_elements(By.XPATH,"//ytd-comment-view-model[@id='comment']//div[@id='content']")
             comments = [X.text for X in comment_elements]
@@ -145,7 +145,7 @@ class YouTubeScraper:
             return comments 
         else:
             # Scroll to load comments
-            for _ in range(5):  # Scroll multiple times to load more comments
+            for _ in range(10):  # Scroll multiple times to load more comments
                 try:
                     element = self.wait.until(EC.presence_of_element_located((By.XPATH,"//div[@id='continuations']")))
                     self.driver.execute_script("""

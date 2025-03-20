@@ -178,7 +178,10 @@ class YouTubeScraper:
         # Extract comments for each video
         # Create the api to enter records as a whole 
         for record in self.records:
-            record["Comments"] = self.extract_comments(record["Link"])
+            try:
+                record["Comments"] = self.extract_comments(record["Link"])
+            except:
+                pass
             requests.post('https://able-extremely-boa.ngrok-free.app/insert-data/',
                       json = record)        
         

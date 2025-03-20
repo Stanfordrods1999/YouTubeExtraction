@@ -183,7 +183,7 @@ class YouTubeScraper:
             try:
                 record["Comments"] = self.extract_comments(record["Link"])
             except:
-                pass
+                record["Comments"] = []
             requests.post('https://able-extremely-boa.ngrok-free.app/insert-data/',
                       json = record)        
         

@@ -123,7 +123,9 @@ class YouTubeScraper:
             self.records.append(record)
     ## TODO: Have a way to exteract comments from shorts as well
     def extract_comments(self, video_url):
-        """Extracts comments from a specific video."""
+        """Extracts comments from a specific video or short , however , there might be a certain problem with this code
+        TODO: Run this in a testing environment
+        """
         self.driver.get(video_url)
         comments = []
         time.sleep(3)

@@ -61,15 +61,6 @@ run-scraper:
 	SELENIUMBASE_CHROME_DRIVER=$(CHROME_DRIVER_PATH) \
 	SELENIUMBASE_HEADLESS="False" \
 	$(VENV_DIR)/bin/python $(CLI_TOOL).py run-executor \
-	--queries "Latest Bollywood news today" \
-	--queries "Upcoming Indian movies 2025" \
-	--queries "Top South Indian movies this year" \
-	--queries "Best Hindi web series 2025" \
-	--queries "Trending Bollywood songs 2025" \
-	--queries "Best Indian rap songs this year" \
-	--queries "Latest cricket updates India" \
-	--queries "IPL 2025 latest news" \
-	--queries "Top Indian gaming YouTubers" \
 	--queries "Most popular Indian streamers 2025" \
 	--queries "Best Indian PC games" \
 	--queries "Upcoming Indian gaming tournaments" \

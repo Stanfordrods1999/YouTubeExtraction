@@ -7,3 +7,10 @@ __pycache__/
 downloaded_files/
 
 env/
+/.env.*
+
+/node_modules/
+*/snippets/*
+.langgraph_api
+
+*.ipynb

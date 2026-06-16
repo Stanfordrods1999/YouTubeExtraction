@@ -1,0 +1,12 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "python_version": "3.13",
+  "dependencies": ["."],
+  "graphs": {
+    "scraping_pipeline": "src.app.graph.graph:graph"
+  },
+  "http": {
+    "app": "src/agent/webapp.py:app"
+  },
+  "env": ".env.local"
+}

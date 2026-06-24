@@ -1,18 +1,24 @@
 # src/app/graph/subgraphs/sourceDiscovery.py
 from langgraph.graph import StateGraph, START, END
-from langgraph.types import RetryPolicy
+from langgraph.types import RetryPolicy, Send
 
 from src.app.graph.state import sourceDiscoveryState
 from src.app.graph.nodes.sourceExtractor import sourceExtractor
 from src.app.graph.nodes.runExtractor import runExtractor
 
+def fan_out_runs(state: sourceDiscoveryState):
+    return [
+        Send("runExtractor", {"source_id": sid['id'],"source_url":sid['source_url'], "topic_id": state["topic_id"]})
+        for sid in state["source_ids"]
+    ]
+
 sourceDiscoveryGraph = (
-    StateGraph(sourceDiscoveryState)
+    StateGraph(sourceDiscoveryState,output_schema=sourceDiscoveryState)
     .add_node("sourceExtractor", sourceExtractor,
               retry_policy=RetryPolicy(retry_on=ValueError))
-    .add_node("runExtractor", runExtractor)
+    .add_node("runExtractor", runExtractor,
+              retry_policy=RetryPolicy(retry_on=ValueError))
     .add_edge(START, "sourceExtractor")
-    .add_edge("sourceExtractor", "runExtractor")
-    .add_edge("runExtractor", END)          # add this — don't rely on the implicit dead-end
+    .add_conditional_edges("sourceExtractor", fan_out_runs, ["runExtractor"])
     .compile(name="source-map-reduce")
 )

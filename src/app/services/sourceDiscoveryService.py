@@ -24,12 +24,12 @@ class sourceDiscoveryService:
         except (StopIteration, json.JSONDecodeError) as e:
             print("Result is", sources.content)
             print(e)
-            return {"sources": []}
+            return {"source_ids": []}
 
         rows = [{**source, "topic_id": metadata["id"]} for source in result.get("sources", [])]
-        await self.repo.createSources(rows)
+        source_ids = await self.repo.createSources(rows)
 
-        return {"sources": rows}
+        return {"topic_id":state['topic_id'],"source_ids":source_ids}
 
     async def _run_source_prompt(self, metadata):
         metadata["topic_text"]

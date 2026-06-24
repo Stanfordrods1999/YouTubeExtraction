@@ -66,7 +66,7 @@ class SupabaseRepository:
         response = (
             await self.client
             .table("sources")
-            .insert(data)
+            .insert(data).select('*')
             .execute()
         )
 
@@ -89,4 +89,19 @@ class SupabaseRepository:
         if not response.data:
             raise ValueError("Could not fetch the data for some reason")
         
+        return response.data
+    
+    async def createExtractions(self,source_id,topic_id,metadata):
+        
+        response  = await (self.client
+                           .table("extraction_runs")
+                           .insert({
+                               "source_id":source_id,
+                                "topic_id":topic_id,
+                                "metadata":metadata
+                            }).execute())
+        
+        if not response.data:
+            raise ValueError("Failed to create sources")
+
         return response.data

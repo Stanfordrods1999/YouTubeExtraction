@@ -84,13 +84,25 @@ class SupabaseRepository:
                           .table('sources')
                           .select('*')
                           .eq('id',topic_id)
-                          .gte('priority_score',0.60).execute())
+                          .execute())
         
         if not response.data:
             raise ValueError("Could not fetch the data for some reason")
         
         return response.data
     
+    async def getExtractionMetadata(self,id):
+        response = await (self.client
+                          .table("extraction_runs")
+                          .select("metadata")
+                          .eq('id',id)
+                          .execute())
+        
+        if not response.data:
+            raise ValueError("Could not fetch the data for some reason")
+        
+        return response.data
+
     async def createExtractions(self,source_id,topic_id,metadata):
         
         response  = await (self.client

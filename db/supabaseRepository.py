@@ -102,7 +102,32 @@ class SupabaseRepository:
             raise ValueError("Could not fetch the data for some reason")
         
         return response.data
-
+    
+    async def getUnEmbeddedUnits(self,e_run_id):
+        response = await (self.client
+                          .table("extraction_runs")
+                          .select("metadata")
+                          .eq("id",e_run_id).single()
+                          .execute()
+                          )
+        
+        if not response.data:
+            raise ValueError
+        
+        return response.data
+    
+    async def updateUnitEmbeddings(self,data):
+        response = await (self.client
+                          .table("extracted_units")
+                          .insert(data)
+                          .execute())
+        
+        if not response:
+            raise ValueError("Cannot add embeddings")
+        
+        return response.data
+    ## TODO: Need to alter and migrate data in metadata to create a new column called text 
+    # where text to be embedded is to be stored 
     async def createExtractions(self,source_id,topic_id,metadata):
         
         response  = await (self.client
@@ -111,7 +136,9 @@ class SupabaseRepository:
                                "source_id":source_id,
                                 "topic_id":topic_id,
                                 "metadata":metadata
-                            }).execute())
+                            })
+                            .select("id")
+                            .execute())
         
         if not response.data:
             raise ValueError("Failed to create sources")

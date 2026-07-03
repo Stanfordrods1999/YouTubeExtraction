@@ -19,6 +19,7 @@ class sourceDiscoveryState(TypedDict):
     discovery_reason:NotRequired[str]
     priority_score:NotRequired[float]
     status:NotRequired[str]
+    extraction_run_ids:Annotated[list[str],operator.add]
 
 class extractionState(TypedDict):
     source_id:str

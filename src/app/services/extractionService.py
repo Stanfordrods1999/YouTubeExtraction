@@ -106,13 +106,13 @@ class extractionService:
 
         except Exception as e:
             logger.warning("Fetch failed for %s: %s", self.source_url, e)
-            self.repo.createExtractions(self.source_id,self.topic_id,{"sourced":False})
-            return None
+            extraction_id = await self.repo.createExtractions(self.source_id,self.topic_id,{"sourced":False})
+            return extraction_id
 
         metadata = self.build_extraction_input(html, self.source_url)
 
         unit_rows = await self._make_atomic_units(metadata)
-        if unit_rows:
-            await self.repo.createExtractions(self.source_id,self.topic_id,unit_rows)   # was createExtractions
+        
+        extraction_id = await self.repo.createExtractions(self.source_id,self.topic_id,unit_rows)  
 
-        return metadata
+        return extraction_id

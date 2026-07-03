@@ -2,6 +2,7 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import RetryPolicy, Send
 
+from src.app.graph.nodes.embedUnits import embedUnits
 from src.app.graph.state import sourceDiscoveryState
 from src.app.graph.nodes.sourceExtractor import sourceExtractor
 from src.app.graph.nodes.runExtractor import runExtractor
@@ -13,12 +14,13 @@ def fan_out_runs(state: sourceDiscoveryState):
     ]
 
 sourceDiscoveryGraph = (
-    StateGraph(sourceDiscoveryState,output_schema=sourceDiscoveryState)
-    .add_node("sourceExtractor", sourceExtractor,
-              retry_policy=RetryPolicy(retry_on=ValueError))
-    .add_node("runExtractor", runExtractor,
-              retry_policy=RetryPolicy(retry_on=ValueError))
+    StateGraph(sourceDiscoveryState, output_schema=sourceDiscoveryState)
+    .add_node("sourceExtractor", sourceExtractor, retry_policy=RetryPolicy(retry_on=ValueError))
+    .add_node("runExtractor", runExtractor, retry_policy=RetryPolicy(retry_on=ValueError))
+    .add_node("embedUnits", embedUnits)
     .add_edge(START, "sourceExtractor")
     .add_conditional_edges("sourceExtractor", fan_out_runs, ["runExtractor"])
+    .add_edge("runExtractor", "embedUnits")   
+    .add_edge("embedUnits", END)
     .compile(name="source-map-reduce")
 )

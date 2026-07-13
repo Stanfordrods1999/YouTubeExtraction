@@ -28,5 +28,6 @@ class extractionState(TypedDict):
 
 class GlobalState(TypedDict):
     topicText:str
+    topicCentroid:Optional[List[float]]
     topicState:Optional[List[TopicState]]
     topicIds: Annotated[List[str], operator.add]

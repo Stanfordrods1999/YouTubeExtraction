@@ -1,3 +1,5 @@
+import asyncio
+from datetime import time
 import json
 import logging
 from typing import Literal
@@ -6,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 import trafilatura
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
+from seleniumbase import SB
 
 from src.app.prompts.transformation import build_atomic_unit_messages
 from db.supabaseRepository import SupabaseRepository
@@ -16,6 +19,12 @@ SCHEMA_TYPES = {"Article", "NewsArticle", "BlogPosting", "Product",
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4.1-mini"
+
+# Module-level: Chrome is heavy; cap concurrent browser instances.
+_BROWSER_SEM = asyncio.Semaphore(2)
+
+_MIN_HTML_LEN = 500
+_BLOCK_MARKERS = ("cf-chl", "Just a moment", "Checking your browser")
 
 
 class AtomicUnit(BaseModel):
@@ -38,7 +47,10 @@ class extractionService:
         )
 
     def _extract_jsonld(self, html: str) -> list[dict]:
-        soup = BeautifulSoup(html, "html.parser")
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+        except TypeError:
+            return {}
         out = []
         for tag in soup.find_all("script", type="application/ld+json"):
             raw = tag.string or tag.get_text()
@@ -90,24 +102,7 @@ class extractionService:
         } for u in result.units]
 
     async def extract(self) -> dict:
-        try:
-            async with AsyncSession() as session:
-                resp = await session.get(
-                    self.source_url,
-                    impersonate="chrome146",   
-                    timeout=60,
-                    headers={
-                        "Referer": "https://www.google.com/",
-                        "Accept-Language": "en-US,en;q=0.9",
-                    },
-                )
-                resp.raise_for_status()
-                html = resp.text
-
-        except Exception as e:
-            logger.warning("Fetch failed for %s: %s", self.source_url, e)
-            extraction_id = await self.repo.createExtractions(self.source_id,self.topic_id,{"sourced":False})
-            return extraction_id
+        html = await self.sourceHTML()
 
         metadata = self.build_extraction_input(html, self.source_url)
 
@@ -115,4 +110,63 @@ class extractionService:
         
         extraction_id = await self.repo.createExtractions(self.source_id,self.topic_id,unit_rows)  
 
-        return extraction_id
+        return extraction_id    
+
+
+
+    def _looks_like_content(self,html: str | None) -> bool:
+        """Validate the artifact, not the process."""
+        if not html or len(html) < _MIN_HTML_LEN:
+            return False
+        head = html[:3000]
+        return not any(marker in head for marker in _BLOCK_MARKERS)
+
+    async def sourceHTML(self) -> str | None:
+        html = await self._curl_fetch()
+        if self._looks_like_content(html):
+            return html
+
+        logger.info("Falling back to browser fetch for %s", self.source_url)
+        async with _BROWSER_SEM:
+            html = await asyncio.to_thread(self._browser_fetch)
+        if self._looks_like_content(html):
+            return html
+
+        logger.error("All fetch tiers failed for %s", self.source_url)
+        return None
+
+    async def _curl_fetch(self) -> str | None:
+        try:
+            async with AsyncSession() as session:
+                resp = await session.get(
+                    self.source_url,
+                    impersonate="chrome",  
+                    timeout=60,
+                    headers={
+                        "Referer": "https://www.google.com/",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    },
+                )
+                resp.raise_for_status()
+                return resp.text
+        except Exception as e:
+            logger.warning("curl_cffi fetch failed for %s: %s", self.source_url, e)
+            return None
+
+    def _browser_fetch(self) -> str | None:
+        """Sync on purpose — runs in a thread via asyncio.to_thread."""
+        try:
+            with SB(uc=True, xvfb=True) as sb:
+                sb.activate_cdp_mode(self.source_url)
+
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    if sb.cdp.evaluate("document.readyState") == "complete":
+                        break
+                    sb.sleep(0.5)
+                sb.sleep(1)  # hydration settle
+
+                return sb.cdp.get_page_source()
+        except Exception as e:
+            logger.warning("Browser fetch failed for %s: %s", self.source_url, e)
+            return None

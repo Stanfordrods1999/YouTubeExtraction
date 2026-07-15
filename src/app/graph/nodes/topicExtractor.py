@@ -7,4 +7,3 @@ async def topicExtractor(state: TopicState):
     topic_service = topicExtractionService(get_repo())
     ids = await topic_service.extract(state)
     return {"topicIds": ids}
-

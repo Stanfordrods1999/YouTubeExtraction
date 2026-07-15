@@ -6,6 +6,8 @@ __pycache__/
 
 downloaded_files/
 
+*.patch
+
 env/
 /.env.*
 

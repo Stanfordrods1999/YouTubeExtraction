@@ -6,7 +6,7 @@ client = AsyncOpenAI()
 
 async def topicEmbed(state: GlobalState):
     response = await client.embeddings.create(
-        model=MODEL,
+        model='text-embedding-3-small',
         input=state["topicText"],
     )
-    return {"topicEmbedding": response.data[0].embedding}
+    return {"topicCentroid": response.data[0].embedding}

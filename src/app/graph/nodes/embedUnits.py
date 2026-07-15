@@ -8,4 +8,6 @@ async def embedUnits(state: sourceDiscoveryState):
     for e_run_id in set(state["extraction_run_ids"]):
         svc = embeddingService(repo=repo, e_run_id=e_run_id)
         total += await svc.embed_pending()
-    return {"embedded_count": total}
+    
+    state['sourceIds']=[X['id'] for X in state['source_ids']]
+    return state

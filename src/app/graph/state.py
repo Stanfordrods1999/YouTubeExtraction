@@ -19,6 +19,7 @@ class sourceDiscoveryState(TypedDict):
     discovery_reason:NotRequired[str]
     priority_score:NotRequired[float]
     status:NotRequired[str]
+    sourceIds: NotRequired[List[str]]
     extraction_run_ids:Annotated[list[str],operator.add]
 
 class extractionState(TypedDict):
@@ -31,3 +32,6 @@ class GlobalState(TypedDict):
     topicCentroid:Optional[List[float]]
     topicState:Optional[List[TopicState]]
     topicIds: Annotated[List[str], operator.add]
+    sourceIds:Annotated[List[str],operator.add]
+    selectedSourceIds:Optional[List[str]]
+    nonselectedSourceIds:Optional[List[str]]

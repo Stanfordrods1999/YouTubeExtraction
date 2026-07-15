@@ -1,3 +1,4 @@
+import json
 import os
 
 from datetime import datetime, timezone
@@ -128,6 +129,17 @@ class SupabaseRepository:
         return response.data
     ## TODO: Need to alter and migrate data in metadata to create a new column called text 
     # where text to be embedded is to be stored 
+
+    async def getEmbeddedUnits(self,source_ids:List[str]):
+        response = await (
+            self.client
+            .table("extracted_units")
+            .select("embedding, extraction_runs!inner()")
+            .in_("extraction_runs.source_id", source_ids)
+            .execute()
+        )
+        return [json.loads(r["embedding"]) for r in response.data]
+    
     async def createExtractions(self,source_id,topic_id,metadata):
         
         response  = await (self.client

@@ -28,6 +28,7 @@ class extractionState(TypedDict):
     topic_id:str
 
 class GlobalState(TypedDict):
+    userAction:str
     topicText:str
     topicCentroid:Optional[List[float]]
     topicState:Optional[List[TopicState]]

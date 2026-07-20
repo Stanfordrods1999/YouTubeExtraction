@@ -92,6 +92,18 @@ class SupabaseRepository:
         
         return response.data
     
+    async def getSourcesbyId(self,source_ids:List[str]) -> List:
+        response = await (self.client
+                          .table("sources")
+                          .select("discovery_reason")
+                          .in_("id",source_ids)
+                          .execute())
+        
+        if not response.data:
+            raise ValueError("Data could not be fetched")
+        
+        return response.data
+    
     async def getExtractionMetadata(self,id):
         response = await (self.client
                           .table("extraction_runs")

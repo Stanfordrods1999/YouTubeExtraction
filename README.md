@@ -51,47 +51,34 @@ The pipeline is a LangGraph `StateGraph` (`src/app/graph/graph.py`) with a neste
 map-reduce subgraph. Every stage is a thin **node** that delegates to a **service**,
 which does the LLM/HTTP work and persists to **Supabase**.
 
-```
-                                 ┌──────────────┐
-                        ┌───────►│ topicExtractor│──── expands topic into subtopics (LLM)
-                        │        │  (LLM → topics)│      → writes `topics`, returns topicIds
-                        │        └──────┬────────┘
-   START ──────────────┤               │  fan_out_sources: one Send() per topic id
-                        │               ▼
-                        │        ┌─────────────────────────────────────────────┐
-                        │        │  sourceDiscovery  (subgraph, map-reduce)      │
-                        │        │                                               │
-                        │        │  sourceExtractor ── web-search for sources    │
-                        │        │   (LLM+search → `sources`)                    │
-                        │        │        │  fan_out_runs: one Send() per source │
-                        │        │        ▼                                      │
-                        │        │  runExtractor ── fetch HTML, clean, decompose │
-                        │        │   (curl/browser → trafilatura → LLM →         │
-                        │        │    `extraction_runs`)                         │
-                        │        │        │                                      │
-                        │        │        ▼                                      │
-                        │        │  embedUnits ── batch-embed atomic units,      │
-                        │        │   surface discovered sourceIds (→ pgvector)   │
-                        │        └──────────────────┬──────────────────────────┘
-                        │                           ▼
-                        │        ┌──────────────────────────────────────┐
-                        │        │  feedbackInterrupt (interruptSelections)│──── PAUSES the run;
-                        │        │   interrupt(): user picks relevant      │     human picks which
-                        │        │   source_ids → selected / non-selected  │     sources are relevant
-                        │        └──────────────────┬──────────────────────┘
-                        │                           │
-                        └───────►┌──────────────┐   │
-                                 │  embedTopic   │   │  both branches join here
-                                 │ (topicEmbed)  │   │
-                                 └──────┬───────┘   │
-                                        ▼           ▼
-                                 ┌──────────────────────────────────────┐
-                                 │  centroidEmbedding                    │──── Rocchio: re-centres
-                                 │  (TransformationService, α·q0 +       │     the topic centroid
-                                 │   β·mean(rel) − γ·mean(non-rel))      │     from the feedback
-                                 └──────────────────┬───────────────────┘
-                                                    ▼
-                                                   END
+As of `makeFeedbackLoop`, the graph is no longer a straight line. After the Rocchio
+centroid is computed, `routeAfterCentroid` reads the human's `userAction` from the
+interrupt and **either finalises the run (END) or loops back to the top**: on
+`reextract` it routes through `reconcileSources`, which rebuilds `topicText` from the
+selected sources' `discovery_reason`, and re-enters at `topicExtractor` for another pass.
+
+```mermaid
+flowchart TD
+    START([START]) --> topicExtractor["topicExtractor<br/>expand topic → subtopics"]
+    START --> embedTopic["embedTopic<br/>embed topicText → centroid<br/>(skipped on reextract)"]
+
+    topicExtractor -->|"fan_out_sources: Send per topicId"| SD
+
+    subgraph SD["sourceDiscovery (subgraph · map-reduce)"]
+        direction TB
+        sourceExtractor["sourceExtractor<br/>web-search sources"] -->|"fan_out_runs: Send per source"| runExtractor["runExtractor<br/>fetch → clean → atomic units"]
+        runExtractor --> embedUnits["embedUnits<br/>embed units · surface sourceIds"]
+    end
+
+    SD --> feedbackInterrupt{{"feedbackInterrupt (interrupt)<br/>user returns action + selected_ids"}}
+
+    embedTopic --> centroidEmbedding
+    feedbackInterrupt --> centroidEmbedding["centroidEmbedding<br/>Rocchio re-centre centroid"]
+
+    centroidEmbedding --> routeAfterCentroid{"routeAfterCentroid<br/>userAction == 'reextract'?"}
+    routeAfterCentroid -->|"reextract"| reconcileSources["reconcileSources<br/>rebuild topicText from<br/>selected discovery_reason"]
+    routeAfterCentroid -->|"else"| END([END])
+    reconcileSources --> topicExtractor
 ```
 
 ### Stage-by-stage (node → service → table)
@@ -103,8 +90,10 @@ which does the LLM/HTTP work and persists to **Supabase**.
 | Source discovery | `nodes/sourceExtractor.py` | `services/sourceDiscoveryService.py` | `ChatOpenAI` + `web_search_preview` tool | `sources` |
 | Content extraction | `nodes/runExtractor.py` | `services/extractionService.py` | curl_cffi → SeleniumBase fallback, `trafilatura`, `gpt-4.1-mini` structured output | `extraction_runs` |
 | Unit embedding | `nodes/embedUnits.py` | `services/embeddingServices.py` | `text-embedding-3-small` | `extracted_units` (+ surfaces `sourceIds` to state) |
-| Human feedback | `nodes/interruptSelections.py` | *(LangGraph `interrupt`)* | — (human-in-the-loop) | *(returns `selectedSourceIds` / `nonselectedSourceIds`)* |
+| Human feedback | `nodes/interruptSelections.py` | *(LangGraph `interrupt`)* | — (human-in-the-loop) | *(returns `userAction` + `selectedSourceIds` / `nonselectedSourceIds`)* |
 | Centroid refinement | `nodes/centroidEmbedding.py` | `services/transformationService.py` | Rocchio + `getEmbeddedUnits` (pgvector) | *(updates `topicCentroid`)* |
+| Loop routing | `nodes/routeAfterCentroid.py` | *(LangGraph `Command`)* | — | *(routes on `userAction`: `reextract` → `reconcileSources`, else → END; resets loop state)* |
+| Source reconciliation | `nodes/reconcileSources.py` | `getSourcesbyId` (Supabase) | — | *(rebuilds `topicText` from selected `discovery_reason`s, then re-enters `topicExtractor`)* |
 
 ### Key concepts
 
@@ -121,12 +110,23 @@ which does the LLM/HTTP work and persists to **Supabase**.
   headless SeleniumBase browser (behind a 2-slot semaphore) if the response looks
   blocked or too small.
 - **Human-in-the-loop source selection.** After `sourceDiscovery` runs, the
-  `feedbackInterrupt` node (`nodes/interruptSelections.py`) calls LangGraph's
-  `interrupt()` to **pause the run** and hand the discovered `sourceIds` back to the
-  caller. The human replies with the ids they consider relevant (a comma-separated
-  string or a list); the node partitions them into `selectedSourceIds` /
-  `nonselectedSourceIds`. Because it interrupts, the graph must be run with a
-  **checkpointer** and resumed with a `Command(resume=...)` (see *Running*).
+  `feedbackInterrupt` node (`nodes/interruptSelections.py`, now `async`) calls
+  LangGraph's `interrupt()` to **pause the run** and hand the discovered `sourceIds`
+  back to the caller. The human resumes with a JSON payload
+  `{"action": "reextract" | "<finalize>", "selected_ids": [...]}` (a JSON string is
+  `json.loads`-parsed; a dict is used as-is). The node stores `action` as `userAction`
+  and partitions `selected_ids` into `selectedSourceIds` / `nonselectedSourceIds`.
+  Because it interrupts, the graph must be run with a **checkpointer** and resumed with a
+  `Command(resume=...)` (see *Running*).
+- **Re-extraction feedback loop.** After `centroidEmbedding`, `routeAfterCentroid`
+  (`nodes/routeAfterCentroid.py`) branches on `userAction`. When it is `reextract` it
+  returns a `Command(goto="reconcileSources", update={...})` that clears the per-pass
+  loop state (`topicText`, `topicState`, `topicIds`, `selectedSourceIds`,
+  `nonselectedSourceIds`); `reconcileSources` (`nodes/reconcileSources.py`) then fetches
+  the selected sources' `discovery_reason` via `getSourcesbyId` and joins them into a new
+  `topicText`, and the graph re-enters at `topicExtractor` for another pass. Any other
+  `userAction` routes to END. `embedTopic` short-circuits (`return state`) when
+  `userAction == "reextract"` so it doesn't re-embed the original topic on loop passes.
 - **Rocchio relevance feedback (now wired in).** `centroidEmbedding`
   (`nodes/centroidEmbedding.py`) feeds the topic centroid and the human's
   selected / non-selected sources to `TransformationService.compute_query_vector`,
@@ -152,8 +152,8 @@ YouTubeExtraction/
 ├── src/
 │   ├── app/
 │   │   ├── graph/
-│   │   │   ├── graph.py            # Top-level StateGraph (…sourceDiscovery → feedbackInterrupt + embedTopic → centroidEmbedding)
-│   │   │   ├── state.py            # TypedDict states: GlobalState / TopicState / sourceDiscoveryState (+ sourceIds / selected / non-selected)
+│   │   │   ├── graph.py            # Top-level StateGraph (…centroidEmbedding → routeAfterCentroid → END | reconcileSources → topicExtractor loop)
+│   │   │   ├── state.py            # TypedDict states: GlobalState / TopicState / sourceDiscoveryState (+ userAction / sourceIds / selected / non-selected)
 │   │   │   ├── nodes/              # Thin graph nodes (delegate to services)
 │   │   │   │   ├── topicExtractor.py
 │   │   │   │   ├── topicEmbed.py
@@ -161,7 +161,9 @@ YouTubeExtraction/
 │   │   │   │   ├── runExtractor.py
 │   │   │   │   ├── embedUnits.py
 │   │   │   │   ├── centroidEmbedding.py   # Rocchio centroid refinement (now wired in)
-│   │   │   │   └── interruptSelections.py # human-in-the-loop source selection (interrupt)
+│   │   │   │   ├── interruptSelections.py # human-in-the-loop source selection (interrupt → userAction + selected_ids)
+│   │   │   │   ├── routeAfterCentroid.py  # Command router: reextract → loop back, else END
+│   │   │   │   └── reconcileSources.py    # rebuilds topicText from selected discovery_reason for the next pass
 │   │   │   └── subgraphs/
 │   │   │       └── sourceDiscovery.py      # map-reduce subgraph: sourceExtractor → runExtractor → embedUnits
 │   │   ├── services/               # Business logic + LLM/HTTP calls
@@ -295,14 +297,17 @@ their content, and embed the resulting units — writing to the `topics`, `sourc
 
 Since the Rocchio commit, the graph **pauses** after source discovery: the
 `feedbackInterrupt` node calls LangGraph's `interrupt()` and returns the discovered
-`sourceIds` to you. You then resume with the ids you consider *relevant*, and the
-`centroidEmbedding` node uses that feedback to re-centre the topic centroid.
+`sourceIds` to you. You then resume with an `action` plus the ids you consider
+*relevant*; the `centroidEmbedding` node uses that feedback to re-centre the topic
+centroid, and (as of `makeFeedbackLoop`) `action == "reextract"` loops the whole
+pipeline back for another pass instead of ending.
 
 Because the graph interrupts, it must run with a **checkpointer** and a thread id. In
 LangGraph Studio, the run will surface the `{"type": "topic_selection", "source_ids": [...]}`
 payload and let you resume. Programmatically it looks like:
 
 ```python
+import json
 from langgraph.types import Command
 
 config = {"configurable": {"thread_id": "my-run"}}
@@ -311,8 +316,13 @@ config = {"configurable": {"thread_id": "my-run"}}
 result = await graph.ainvoke({"topicText": "quantum error correction"}, config)
 payload = result["__interrupt__"][0].value          # {"type": "topic_selection", "source_ids": [...]}
 
-# 2) Resume with the relevant source ids (comma-separated string or a list).
-final = await graph.ainvoke(Command(resume="src-id-1, src-id-3"), config)
+# 2) Resume with an action + the relevant source ids (JSON string or dict).
+#    action == "reextract" loops back through reconcileSources → topicExtractor;
+#    any other action finalises the run at END.
+final = await graph.ainvoke(
+    Command(resume=json.dumps({"action": "finalize", "selected_ids": ["src-id-1", "src-id-3"]})),
+    config,
+)
 # final["topicCentroid"] is now the Rocchio-refined centroid.
 ```
 
@@ -387,7 +397,8 @@ Supabase or OpenAI — and all pass under the command above):
 These were found while parsing the code and are documented here so they're visible.
 The **Rocchio commit** (`feat: implement Rocchio relevance feedback for topic
 embeddings`) fixed several of the items below (marked ✅) and introduced one new
-regression (#13). The remaining items are still open.
+regression (#13). The **`makeFeedbackLoop` commit** then added the re-extraction loop,
+which has its own open logical issues (#15–#19). The remaining items are still open.
 
 ### Correctness bugs (pipeline)
 
@@ -446,6 +457,39 @@ regression (#13). The remaining items are still open.
     Decide the intended contract (likely: return a partial `{"sourceIds": [...]}` and
     read source ids from wherever they're actually populated), then rewrite the node's
     tests to match.
+
+### Re-extraction feedback loop (`makeFeedbackLoop`)
+
+These are logical issues in the loop the latest commit added
+(`centroidEmbedding → routeAfterCentroid → reconcileSources → topicExtractor`):
+
+15. **The loop-state reset is a no-op for reducer channels.** `routeAfterCentroid`
+    returns `Command(update={"topicIds": [], ...})`, but `topicIds` and `sourceIds` are
+    `Annotated[List, operator.add]`, so the update computes `old + [] = old` and never
+    clears. On each `reextract` pass the previous topic/source ids persist and new ones
+    are appended, so `fan_out_sources` re-fans over stale topics and the id lists grow
+    unbounded. (`topicText`, `topicState`, and the selection lists are plain channels, so
+    those do reset.)
+16. **The human's selection is discarded on re-extraction.** `routeAfterCentroid` sets
+    `selectedSourceIds=None` *before* routing to `reconcileSources`, whose
+    `state.get("selectedSourceIds") or state["sourceIds"]` then always falls through to
+    the full (accumulated) `sourceIds`. The relevance feedback the loop exists to act on
+    never reaches `reconcileSources`.
+17. **`topicEmbed`'s `reextract` guard is unreachable via the loop.** The node guards
+    `if state.get('userAction') == 'reextract': return state`, implying it re-runs each
+    pass, but the graph only wires `START → embedTopic`; the loop re-enters at
+    `topicExtractor`. So the guard is effectively dead code and the
+    `["embedTopic", "feedbackInterrupt"] → centroidEmbedding` join is fragile on pass ≥2.
+18. **No loop-termination guard.** Nothing bounds the number of `reextract` iterations;
+    a caller repeatedly choosing `reextract` loops indefinitely while ids and DB writes
+    accumulate.
+19. **Whole-`state` returns re-apply reducers.** `centroidEmbedding` and the `topicEmbed`
+    guard `return state` (like `embedUnits`, see #13); channels with `operator.add`
+    (`topicIds`, `sourceIds`, `extraction_run_ids`) then re-add their own contents, and
+    the loop compounds the duplication every pass. `getSourcesbyId` also raises
+    `ValueError` on an empty result, so a legitimately empty selection crashes
+    `reconcileSources`. Debug `print()` calls remain in `routeAfterCentroid` and
+    `interruptSelections`.
 
 ### Configuration & tooling
 

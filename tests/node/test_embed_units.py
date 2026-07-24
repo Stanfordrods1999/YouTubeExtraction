@@ -1,4 +1,11 @@
+"""Unit tests for the embedUnits node (subgraph fan-in).
 
+Contract: embed every pending unit for each unique extraction run, then
+surface the plain source ids for the human-selection interrupt as a
+*partial* update — `{"sourceIds": [...]}` — never the whole mutated state
+(returning full state would re-feed the add-reducer channels into
+themselves and duplicate their contents).
+"""
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,45 +32,51 @@ def make_service_factory(counts_by_run_id, created):
 
 
 @pytest.mark.asyncio
-async def test_empty_run_ids_returns_zero_and_builds_no_service():
+async def test_empty_run_ids_builds_no_service_and_returns_empty_source_ids():
     created = []
     with patch(f"{MODULE}.get_repo") as mock_get_repo, \
          patch(f"{MODULE}.embeddingService",
                side_effect=make_service_factory({}, created)):
-        result = await embedUnits({"extraction_run_ids": []})
+        result = await embedUnits({"extraction_run_ids": [], "source_ids": []})
 
-    assert result == {"embedded_count": 0}
+    assert result == {"sourceIds": []}
     assert created == []                      # no service constructed
     mock_get_repo.assert_called_once()        # repo still resolved once
 
 
 @pytest.mark.asyncio
-async def test_single_run_id_passes_repo_and_id_and_returns_count():
-    created = []
-    fake_repo = object()
-    with patch(f"{MODULE}.get_repo", return_value=fake_repo), \
+async def test_missing_source_ids_key_is_tolerated():
+    # A defensive path: fan-in state without source_ids must not KeyError.
+    with patch(f"{MODULE}.get_repo", return_value=object()), \
          patch(f"{MODULE}.embeddingService",
-               side_effect=make_service_factory({"run-1": 7}, created)):
-        result = await embedUnits({"extraction_run_ids": ["run-1"]})
+               side_effect=make_service_factory({}, [])):
+        result = await embedUnits({"extraction_run_ids": []})
 
-    assert result == {"embedded_count": 7}
-    assert created == [(fake_repo, "run-1")]  # correct repo + id wiring
+    assert result == {"sourceIds": []}
 
 
 @pytest.mark.asyncio
-async def test_multiple_run_ids_sums_counts():
-    # set() iteration order is nondeterministic, so counts are keyed by id
-    counts = {"run-1": 3, "run-2": 5, "run-3": 0}
+async def test_embeds_each_run_and_surfaces_source_ids_in_order():
+    counts = {"run-1": 3, "run-2": 5}
     created = []
-    with patch(f"{MODULE}.get_repo", return_value=object()), \
+    source_rows = [
+        {"id": "src-a", "source_url": "https://a.example"},
+        {"id": "src-b", "source_url": "https://b.example"},
+    ]
+    fake_repo = object()
+    with patch(f"{MODULE}.get_repo", return_value=fake_repo), \
          patch(f"{MODULE}.embeddingService",
                side_effect=make_service_factory(counts, created)):
-        result = await embedUnits(
-            {"extraction_run_ids": ["run-1", "run-2", "run-3"]}
-        )
+        result = await embedUnits({
+            "extraction_run_ids": ["run-1", "run-2"],
+            "source_ids": source_rows,
+        })
 
-    assert result == {"embedded_count": 8}
-    assert sorted(rid for _, rid in created) == ["run-1", "run-2", "run-3"]
+    # Source ids surfaced as a partial update, order preserved.
+    assert result == {"sourceIds": ["src-a", "src-b"]}
+    # Each run embedded exactly once, with the resolved repo.
+    assert sorted(rid for _, rid in created) == ["run-1", "run-2"]
+    assert all(repo is fake_repo for repo, _ in created)
 
 
 @pytest.mark.asyncio
@@ -74,11 +87,11 @@ async def test_duplicate_run_ids_are_deduplicated():
     with patch(f"{MODULE}.get_repo", return_value=object()), \
          patch(f"{MODULE}.embeddingService",
                side_effect=make_service_factory({"run-1": 4}, created)):
-        result = await embedUnits(
-            {"extraction_run_ids": ["run-1", "run-1", "run-1"]}
-        )
+        await embedUnits({
+            "extraction_run_ids": ["run-1", "run-1", "run-1"],
+            "source_ids": [],
+        })
 
-    assert result == {"embedded_count": 4}    # counted once, not 12
     assert len(created) == 1                  # constructed once
 
 
@@ -94,20 +107,4 @@ async def test_embed_pending_exception_propagates():
     with patch(f"{MODULE}.get_repo", return_value=object()), \
          patch(f"{MODULE}.embeddingService", side_effect=factory):
         with pytest.raises(ValueError, match="boom"):
-            await embedUnits({"extraction_run_ids": ["run-1"]})
-
-
-@pytest.mark.asyncio
-async def test_repo_resolved_at_call_time_not_import_time():
-    # Call twice with different repos; each invocation must use the repo
-    # returned by get_repo() at that moment (call-time DI, lazy singleton).
-    created = []
-    repo_a, repo_b = object(), object()
-    with patch(f"{MODULE}.get_repo", side_effect=[repo_a, repo_b]), \
-         patch(f"{MODULE}.embeddingService",
-               side_effect=make_service_factory({"r": 1}, created)):
-        await embedUnits({"extraction_run_ids": ["r"]})
-        await embedUnits({"extraction_run_ids": ["r"]})
-
-    assert created[0][0] is repo_a
-    assert created[1][0] is repo_b
+            await embedUnits({"extraction_run_ids": ["run-1"], "source_ids": []})

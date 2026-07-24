@@ -1,13 +1,29 @@
-from langchain_openai import ChatOpenAI
+import json
+import logging
 
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field, ValidationError
+
+from src.app.config import settings
 from src.app.graph.state import sourceDiscoveryState
 from db.supabaseRepository import SupabaseRepository
-import json
+
+logger = logging.getLogger(__name__)
+
+
+class DiscoveredSource(BaseModel):
+    """Validates the discovery LLM's JSON before it reaches the database."""
+    source_type: str
+    source_url: str
+    discovery_reason: str
+    priority_score: float = Field(ge=0.0, le=1.0)
+    status: str = "discovered"
+
 
 class sourceDiscoveryService:
     def __init__(self, repo: SupabaseRepository):
         self.repo = repo
-        self.llm = ChatOpenAI(model="gpt-5.4").bind_tools([
+        self.llm = ChatOpenAI(model=settings.discovery_model).bind_tools([
             {"type": "web_search_preview"},
             ])
 
@@ -22,21 +38,32 @@ class sourceDiscoveryService:
             )
             result = json.loads(text)
         except (StopIteration, json.JSONDecodeError) as e:
-            print("Result is", sources.content)
-            print(e)
-            return {"source_ids": []}
+            logger.warning(
+                "Source discovery returned unparseable output for topic %s: %s",
+                state["topic_id"], e,
+            )
+            return {"topic_id": state["topic_id"], "source_ids": []}
 
-        rows = [{**source, "topic_id": metadata["id"]} for source in result.get("sources", [])]
+        rows = []
+        for raw in result.get("sources", []):
+            try:
+                validated = DiscoveredSource.model_validate(raw)
+            except ValidationError as e:
+                logger.warning("Dropping invalid discovered source %r: %s", raw, e)
+                continue
+            rows.append({**validated.model_dump(), "topic_id": metadata["id"]})
+
+        if not rows:
+            return {"topic_id": state["topic_id"], "source_ids": []}
+
         source_ids = await self.repo.createSources(rows)
 
         return {"topic_id":state['topic_id'],"source_ids":source_ids}
 
     async def _run_source_prompt(self, metadata):
-        metadata["topic_text"]
-
         prompt = f"""
         You are a research assistant.
-s
+
         Topic:
         {metadata["topic_text"]}
 

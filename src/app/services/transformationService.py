@@ -3,6 +3,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from src.app.config import settings
 from db.supabaseRepository import SupabaseRepository
 
 
@@ -17,7 +18,12 @@ class TransformationService:
             self._fetch(selected_ids),
             self._fetch(non_selected_ids),
         )
-        return self.rocchio_embedding(q0, rel_embs, nonrel_embs)
+        return self.rocchio_embedding(
+            q0, rel_embs, nonrel_embs,
+            alpha=settings.rocchio_alpha,
+            beta=settings.rocchio_beta,
+            gamma=settings.rocchio_gamma,
+        )
 
     async def _fetch(self, ids: List[str]) -> List[List[float]]:
         return await self.repo.getEmbeddedUnits(ids) if ids else []

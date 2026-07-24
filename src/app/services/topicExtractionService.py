@@ -1,6 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import JsonOutputParser
+from src.app.config import settings
 from db.supabaseRepository import SupabaseRepository
 from src.app.graph.state import TopicState
 from typing import List
@@ -11,7 +12,7 @@ class topicExtractionService:
     def __init__(self, repo: SupabaseRepository):
         self.repo = repo
         self.llm = ChatOpenAI(
-            model="gpt-4.1-mini",
+            model=settings.chat_model,
             temperature=0
         )
 

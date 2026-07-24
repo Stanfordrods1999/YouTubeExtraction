@@ -1,11 +1,14 @@
-# tests/services/test_embedding_service.py
-#
-# Requires: pytest, pytest-asyncio
-# Tests the FIXED embed_pending: updates keyed by row["id"], zip(strict=True).
-#
-# AsyncOpenAI is instantiated inside __init__, so we patch it in the
-# service's module namespace (patch where it's *used*).
+"""Unit tests for embeddingService.embed_pending.
 
+Contract: read the pending unit dicts from the run's metadata blob, embed
+their texts in batches, and insert *complete* extracted_units rows —
+content and semantic_type travel WITH the embedding, so a similarity hit
+can always show the sentence it encodes. zip(strict=True) guards against
+misattributing embeddings to the wrong sentences.
+
+AsyncOpenAI is instantiated inside __init__, so we patch it in the
+service's module namespace (patch where it's *used*).
+"""
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,8 +18,9 @@ from src.app.services.embeddingServices import embeddingService, BATCH_SIZE
 MODULE = "src.app.services.embeddingServices"
 
 
-def make_row(i):
-    return {"id": f"unit-{i}", "text": f"some text {i}"}
+def make_unit(i, kind="fact"):
+    return {"text": f"some text {i}", "kind": kind,
+            "source_id": "src-1", "topic_id": "top-1"}
 
 
 def make_openai_mock(embeddings_per_call):
@@ -32,15 +36,16 @@ def make_openai_mock(embeddings_per_call):
     return client
 
 
-def make_repo(rows):
+def make_repo(units):
     repo = MagicMock()
-    repo.getUnEmbeddedUnits = AsyncMock(return_value=rows)
+    # getUnEmbeddedUnits returns the run row; units live under "metadata".
+    repo.getUnEmbeddedUnits = AsyncMock(return_value={"metadata": units})
     repo.updateUnitEmbeddings = AsyncMock()
     return repo
 
 
 @pytest.mark.asyncio
-async def test_no_pending_rows_returns_zero_and_never_calls_openai():
+async def test_no_pending_units_returns_zero_and_never_calls_openai():
     repo = make_repo([])
     client = make_openai_mock([])
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
@@ -54,10 +59,10 @@ async def test_no_pending_rows_returns_zero_and_never_calls_openai():
 
 
 @pytest.mark.asyncio
-async def test_single_batch_updates_keyed_by_unit_id():
-    rows = [make_row(0), make_row(1)]
+async def test_inserts_content_and_semantic_type_with_each_embedding():
+    units = [make_unit(0, kind="fact"), make_unit(1, kind="statistic")]
     vectors = [[0.1, 0.2], [0.3, 0.4]]
-    repo = make_repo(rows)
+    repo = make_repo(units)
     client = make_openai_mock([vectors])
 
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
@@ -66,14 +71,51 @@ async def test_single_batch_updates_keyed_by_unit_id():
 
     assert result == 2
 
-    # Correct model and exact input texts, in order
+    # Correct model and exact input texts, in order.
     _, kwargs = client.embeddings.create.await_args
     assert kwargs["model"] == "text-embedding-3-small"
     assert kwargs["input"] == ["some text 0", "some text 1"]
 
-    # THE critical assertion: each unit id paired with ITS embedding
+    # THE critical assertion: each row carries its own text + type + vector.
     (updates,), _ = repo.updateUnitEmbeddings.await_args
     assert updates == [
-        {"id": "unit-0", "embedding": [0.1, 0.2]},
-        {"id": "unit-1", "embedding": [0.3, 0.4]},
+        {"extraction_run_id": "run-1", "content": "some text 0",
+         "semantic_type": "fact", "embedding": [0.1, 0.2]},
+        {"extraction_run_id": "run-1", "content": "some text 1",
+         "semantic_type": "statistic", "embedding": [0.3, 0.4]},
     ]
+
+
+@pytest.mark.asyncio
+async def test_batches_split_at_batch_size():
+    n = BATCH_SIZE + 3
+    units = [make_unit(i) for i in range(n)]
+    repo = make_repo(units)
+    client = make_openai_mock([
+        [[float(i)] for i in range(BATCH_SIZE)],
+        [[float(i)] for i in range(3)],
+    ])
+
+    with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
+        svc = embeddingService(repo=repo, e_run_id="run-1")
+        result = await svc.embed_pending()
+
+    assert result == n
+    assert client.embeddings.create.await_count == 2
+    assert repo.updateUnitEmbeddings.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_embedding_count_mismatch_raises_instead_of_misattributing():
+    # If OpenAI returned fewer vectors than texts, silently zipping would
+    # pair sentences with the wrong embeddings; strict zip must raise.
+    units = [make_unit(0), make_unit(1)]
+    repo = make_repo(units)
+    client = make_openai_mock([[[0.1, 0.2]]])   # only ONE vector for two texts
+
+    with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
+        svc = embeddingService(repo=repo, e_run_id="run-1")
+        with pytest.raises(ValueError):
+            await svc.embed_pending()
+
+    repo.updateUnitEmbeddings.assert_not_awaited()

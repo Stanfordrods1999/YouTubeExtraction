@@ -1,15 +1,17 @@
 import asyncio
-from datetime import time
 import json
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Literal
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 import trafilatura
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
 from seleniumbase import SB
 
+from src.app.config import settings
 from src.app.prompts.transformation import build_atomic_unit_messages
 from db.supabaseRepository import SupabaseRepository
 
@@ -17,8 +19,6 @@ SCHEMA_TYPES = {"Article", "NewsArticle", "BlogPosting", "Product",
                 "Review", "Recipe", "Report", "QAPage", "FAQPage"}
 
 logger = logging.getLogger(__name__)
-
-MODEL = "gpt-4.1-mini"
 
 # Module-level: Chrome is heavy; cap concurrent browser instances.
 _BROWSER_SEM = asyncio.Semaphore(2)
@@ -41,7 +41,7 @@ class extractionService:
         self.topic_id = topic_id
         self.source_url = source_url
         self.source_id = source_id
-        self.client = ChatOpenAI(model=MODEL, temperature=0)
+        self.client = ChatOpenAI(model=settings.chat_model, temperature=0)
         self.decomposer = self.client.with_structured_output(
             UnitsResponse, method="json_mode"
         )
@@ -50,7 +50,7 @@ class extractionService:
         try:
             soup = BeautifulSoup(html, "html.parser")
         except TypeError:
-            return {}
+            return []
         out = []
         for tag in soup.find_all("script", type="application/ld+json"):
             raw = tag.string or tag.get_text()
@@ -74,7 +74,7 @@ class extractionService:
         body = trafilatura.extract(html, include_comments=False,
                                    include_tables=True, url=url) or ""
         return {"readable_text": body, "structured": self._extract_jsonld(html)}
-    
+
     def _title_from_structured(self, structured: list[dict]) -> str | None:
         for item in structured:
             if item.get("headline") or item.get("name"):
@@ -102,15 +102,26 @@ class extractionService:
         } for u in result.units]
 
     async def extract(self) -> dict:
-        html = await self.sourceHTML()
+        started_at = datetime.now(timezone.utc).isoformat()
+        html, strategy = await self.sourceHTML()
+
+        if html is None:
+            # Every fetch tier failed: record the failure instead of burning an
+            # LLM call on empty text and storing a junk run.
+            return await self.repo.createExtractions(
+                self.source_id, self.topic_id, [],
+                status="failed", failure_reason="fetch_failed",
+                started_at=started_at,
+            )
 
         metadata = self.build_extraction_input(html, self.source_url)
-
         unit_rows = await self._make_atomic_units(metadata)
-        
-        extraction_id = await self.repo.createExtractions(self.source_id,self.topic_id,unit_rows)  
 
-        return extraction_id    
+        return await self.repo.createExtractions(
+            self.source_id, self.topic_id, unit_rows,
+            status="completed", extraction_strategy=strategy,
+            started_at=started_at,
+        )
 
 
 
@@ -121,26 +132,27 @@ class extractionService:
         head = html[:3000]
         return not any(marker in head for marker in _BLOCK_MARKERS)
 
-    async def sourceHTML(self) -> str | None:
+    async def sourceHTML(self) -> tuple[str | None, str | None]:
+        """Returns (html, strategy) where strategy names the tier that won."""
         html = await self._curl_fetch()
         if self._looks_like_content(html):
-            return html
+            return html, "curl"
 
         logger.info("Falling back to browser fetch for %s", self.source_url)
         async with _BROWSER_SEM:
             html = await asyncio.to_thread(self._browser_fetch)
         if self._looks_like_content(html):
-            return html
+            return html, "browser"
 
         logger.error("All fetch tiers failed for %s", self.source_url)
-        return None
+        return None, None
 
     async def _curl_fetch(self) -> str | None:
         try:
             async with AsyncSession() as session:
                 resp = await session.get(
                     self.source_url,
-                    impersonate="chrome",  
+                    impersonate="chrome",
                     timeout=60,
                     headers={
                         "Referer": "https://www.google.com/",

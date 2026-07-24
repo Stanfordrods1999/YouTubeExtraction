@@ -5,10 +5,10 @@
 > active project is now a topic → source → extraction → embedding pipeline that turns
 > a single research topic into a searchable store of embedded "atomic facts."
 
-⚠️ **Status: work in progress.** The pipeline runs end-to-end in spirit but several
-nodes have known bugs (see [Known Issues / Review Findings](#known-issues--review-findings)).
-Treat this README as a map of *what the code is trying to do*, with the rough edges
-called out honestly.
+**Status: working end-to-end.** The pipeline runs topic → discovery → extraction →
+embedding → human feedback → Rocchio refinement, with an optional bounded
+re-extract loop. Remaining rough edges are tracked honestly in
+[Known Issues / Review Findings](#known-issues--review-findings).
 
 ---
 
@@ -122,11 +122,16 @@ which does the LLM/HTTP work and persists to **Supabase**.
   blocked or too small.
 - **Human-in-the-loop source selection.** After `sourceDiscovery` runs, the
   `feedbackInterrupt` node (`nodes/interruptSelections.py`) calls LangGraph's
-  `interrupt()` to **pause the run** and hand the discovered `sourceIds` back to the
-  caller. The human replies with the ids they consider relevant (a comma-separated
-  string or a list); the node partitions them into `selectedSourceIds` /
-  `nonselectedSourceIds`. Because it interrupts, the graph must be run with a
-  **checkpointer** and resumed with a `Command(resume=...)` (see *Running*).
+  `interrupt()` to **pause the run**, advertising each discovered source's URL,
+  discovery reason, and priority score. The human resumes with
+  `{"action": "reextract" | "end", "selected_ids": [...]}`; the node partitions the
+  sources into `selectedSourceIds` / `nonselectedSourceIds`. Because it interrupts,
+  the graph must be run with a **checkpointer** and resumed with a
+  `Command(resume=...)` (see *Running*).
+- **Bounded re-extract loop.** After the centroid is refined, `route_after_centroid`
+  either ends the run or (on `"reextract"`) loops back through `reconcileSources`,
+  which seeds a new topic text from the selected sources and resets the accumulating
+  state channels. The loop is capped by `MAX_ITERATIONS` (default 3).
 - **Rocchio relevance feedback (now wired in).** `centroidEmbedding`
   (`nodes/centroidEmbedding.py`) feeds the topic centroid and the human's
   selected / non-selected sources to `TransformationService.compute_query_vector`,
@@ -147,7 +152,7 @@ which does the LLM/HTTP work and persists to **Supabase**.
 YouTubeExtraction/
 ├── langgraph.json                 # LangGraph entry: graph `scraping_pipeline` + FastAPI app
 ├── pyproject.toml                 # Current dependency source of truth (uv, Python ≥3.13)
-├── main.py                        # Unused "Hello" stub
+├── .env.example                   # Documented env vars (see src/app/config.py)
 │
 ├── src/
 │   ├── app/
@@ -186,9 +191,9 @@ YouTubeExtraction/
 ├── logs/Logging.py                 # Small logging wrapper (legacy scraper)
 │
 ├── tests/
-│   ├── node/test_embed_units.py    # Unit tests for the embedUnits node (solid)
-│   ├── unit/test_embed_service.py  # Tests the *intended* embed_pending shape (see Known Issues)
-│   ├── integration/test_topicExtractor.py  # Currently broken (see Known Issues)
+│   ├── node/                       # Node-level unit tests (embedUnits, topicEmbed, interrupt, centroid)
+│   ├── unit/                       # Service/repo unit tests (embedding, Rocchio, topics, getEmbeddedUnits)
+│   ├── integration/                # interrupt → resume → centroid slice with a real checkpointer
 │   └── execdata.py                 # Legacy scraper smoke test
 │
 └── ── Legacy scraper ──
@@ -243,8 +248,6 @@ uv sync
 
 > Note: `pyproject.toml` is the current source of truth. `requirements.txt` only
 > covers the legacy scraper and will **not** install the pipeline's dependencies.
-> Also see Known Issues — a few imported packages (`openai`, `langchain-openai`,
-> `langchain-core`) are not yet declared in `pyproject.toml`.
 
 ### 2. Start the local Supabase stack
 
@@ -264,9 +267,10 @@ The API defaults to `http://127.0.0.1:54321`, Studio to `http://127.0.0.1:54323`
 OPENAI_API_KEY=sk-...
 ```
 
-> Supabase connection details are currently **hardcoded** in
-> `db/supabaseRepository.py` (local URL + a local `sb_secret_...` key). See Known
-> Issues — these should be moved to env vars before connecting to any real project.
+> All other settings (Supabase URL/key, model ids, Rocchio α/β/γ, the loop cap)
+> live in `src/app/config.py` and are overridable via env vars — see
+> `.env.example`. The baked-in Supabase defaults are the CLI's public local-dev
+> values, so the local stack works with zero extra config.
 
 ---
 
@@ -293,13 +297,17 @@ their content, and embed the resulting units — writing to the `topics`, `sourc
 
 #### Human-in-the-loop: the source-selection interrupt
 
-Since the Rocchio commit, the graph **pauses** after source discovery: the
-`feedbackInterrupt` node calls LangGraph's `interrupt()` and returns the discovered
-`sourceIds` to you. You then resume with the ids you consider *relevant*, and the
+The graph **pauses** after source discovery: the `feedbackInterrupt` node calls
+LangGraph's `interrupt()` and hands you the discovered sources — each with its
+URL, discovery reason, and priority score, so the selection is reviewable. You
+resume with the ids you consider *relevant* plus an action, and the
 `centroidEmbedding` node uses that feedback to re-centre the topic centroid.
+Choosing `"reextract"` loops the pipeline: the selected sources' discovery
+reasons seed a new topic text and the whole discover → extract → embed cycle
+runs again (bounded by `MAX_ITERATIONS`, default 3).
 
 Because the graph interrupts, it must run with a **checkpointer** and a thread id. In
-LangGraph Studio, the run will surface the `{"type": "topic_selection", "source_ids": [...]}`
+LangGraph Studio, the run will surface the `{"type": "source_selection", ...}`
 payload and let you resume. Programmatically it looks like:
 
 ```python
@@ -309,11 +317,17 @@ config = {"configurable": {"thread_id": "my-run"}}
 
 # 1) First invocation pauses at the interrupt.
 result = await graph.ainvoke({"topicText": "quantum error correction"}, config)
-payload = result["__interrupt__"][0].value          # {"type": "topic_selection", "source_ids": [...]}
+payload = result["__interrupt__"][0].value
+# {"type": "source_selection", "source_ids": [...],
+#  "sources": [{"id": ..., "source_url": ..., "discovery_reason": ..., "priority_score": ...}, ...]}
 
-# 2) Resume with the relevant source ids (comma-separated string or a list).
-final = await graph.ainvoke(Command(resume="src-id-1, src-id-3"), config)
+# 2) Resume with an action and the relevant source ids.
+final = await graph.ainvoke(
+    Command(resume={"action": "end", "selected_ids": ["src-id-1", "src-id-3"]}),
+    config,
+)
 # final["topicCentroid"] is now the Rocchio-refined centroid.
+# Use {"action": "reextract", ...} to run another discovery iteration instead.
 ```
 
 > Note: `graph.compile()` in `graph.py` does **not** attach a checkpointer, so the
@@ -330,158 +344,90 @@ See [Legacy: the YouTube scraper](#legacy-the-youtube-scraper).
 ## Testing
 
 Tests use `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`,
-`pythonpath = ["."]`).
+`pythonpath = ["."]`; the seleniumbase/pytest-html plugins are disabled via
+`addopts` so a bare run just works):
 
 ```bash
-# The seleniumbase pytest plugin (a legacy-scraper dep) crashes on collection
-# with setuptools ≥82 because pkg_resources was removed. Disable it + pytest-html
-# to run the pipeline suite:
-uv run pytest -p no:seleniumbase -p no:sb_pytest -p no:html tests/ -v
+uv run pytest tests/ -v
 ```
 
-### Existing suites
+### Suites
 
-| Suite | State |
-| --- | --- |
-| `tests/node/test_embed_units.py` | **⚠️ Broken by the Rocchio commit.** The node now returns the whole mutated `state` (not `{"embedded_count": ...}`) and reads `state["source_ids"]`, so every assertion here fails and the empty-input case raises `KeyError`. These tests still describe the *old* contract and need rewriting (or the node needs revisiting — see Known Issues). |
-| `tests/unit/test_embed_service.py` | **Aspirational.** Asserts an id-keyed `{"id", "embedding"}` update shape that the current `embeddingService`/repo don't produce — documents the intended fix rather than current behavior. |
-| `tests/integration/test_topicExtractor.py` | **Broken.** Passes `llm=None` to a constructor that doesn't accept it and asserts `result is List[str]`. Also hits a live local Supabase. |
-| `tests/execdata.py` | Legacy scraper smoke test; launches a real browser. |
-
-### Tests added for the Rocchio / feedback work
-
-These cover the code the latest commit introduced (all mock-only — no live
-Supabase or OpenAI — and all pass under the command above):
+All suites are mock-only (no live Supabase or OpenAI) and pass:
 
 | Suite | Covers |
 | --- | --- |
-| `tests/unit/test_transformation_service.py` | `rocchio_embedding` math (α/β/γ terms, normalisation, zero-vector guard, list output) and `compute_query_vector` (fetches both selections, skips the repo on empty id lists). |
-| `tests/unit/test_get_embedded_units.py` | `SupabaseRepository.getEmbeddedUnits` — the `extracted_units ⋈ extraction_runs` filter and JSON→list embedding decode, against a fake client chain. |
-| `tests/node/test_topic_embed.py` | `topicEmbed` now uses `text-embedding-3-small` and returns `topicCentroid` (the two bugs the commit fixed). |
-| `tests/node/test_interrupt_selections.py` | `interruptSelections` — string vs list resume input, selected/non-selected partition, and the interrupt payload shape. |
-| `tests/node/test_centroid_embedding.py` | `centroidEmbedding` wires the repo + `TransformationService` and writes the refined centroid back to state. |
-| `tests/integration/test_feedback_loop.py` | Drives `feedbackInterrupt → centroidEmbedding` in a real `StateGraph` with a `MemorySaver` checkpointer: invoke → pause at interrupt → `Command(resume=...)` → recomputed centroid. |
-| `tests/conftest.py` | Sets a dummy `OPENAI_API_KEY` so modules that build an `AsyncOpenAI()` at import time (e.g. `topicEmbed`) can be collected. |
-
-### Still needed
-
-- **Rewrite `tests/node/test_embed_units.py`** to the node's current contract once
-  its return shape is settled (see Known Issue #13).
-- **A live integration test for `getEmbeddedUnits`** against a seeded local Supabase
-  (the join on `extraction_runs.source_id` and the JSON-string `embedding` column are
-  only exercised with a fake client today).
-- **A full-graph resume test** (`graph.py`) once the upstream nodes it depends on
-  (`sourceDiscoveryService` model id, `embedUnits` return shape) are fixed — currently
-  a real end-to-end run can't reach the interrupt.
-- **`embed_pending` tests against real repo/OpenAI shapes** (the aspirational
-  `test_embed_service.py` should become executable once the metadata→`extracted_units`
-  migration lands).
-
-> The `Makefile` `test` target points at `tests/test_execdata.py`, which does not
-> exist (the file is `tests/execdata.py`).
+| `tests/node/test_embed_units.py` | `embedUnits` — embeds each unique run once and returns the partial `{"sourceIds": [...]}` update (never the whole state). |
+| `tests/node/test_topic_embed.py` | `topicEmbed` uses the configured embedding model and returns `topicCentroid`. |
+| `tests/node/test_interrupt_selections.py` | `interruptSelections` — reviewable interrupt payload (URLs/reasons/scores), `{"action", "selected_ids"}` resume contract, partitioning, malformed-payload errors. |
+| `tests/node/test_centroid_embedding.py` | `centroidEmbedding` wires the repo + `TransformationService` and returns the refined centroid. |
+| `tests/unit/test_transformation_service.py` | `rocchio_embedding` math (α/β/γ terms, normalisation, zero-vector guard) and `compute_query_vector` orchestration. |
+| `tests/unit/test_embed_service.py` | `embed_pending` — content + semantic_type inserted with each embedding, batching, and the strict-zip mismatch guard. |
+| `tests/unit/test_get_embedded_units.py` | `SupabaseRepository.getEmbeddedUnits` — the `extracted_units ⋈ extraction_runs` filter and JSON→list embedding decode. |
+| `tests/unit/test_topic_extraction_service.py` | `topicExtractionService.extract` persists the chain output and returns ids. |
+| `tests/integration/test_feedback_loop.py` | `feedbackInterrupt → centroidEmbedding` in a real `StateGraph` with a `MemorySaver` checkpointer: invoke → pause → resume → recomputed centroid. |
+| `tests/conftest.py` | Sets a dummy `OPENAI_API_KEY` so modules that build an `AsyncOpenAI()` at import time can be collected. |
+| `tests/execdata.py` | Legacy scraper smoke test; launches a real browser (not part of the pipeline suite). |
 
 ---
 
 ## Known Issues / Review Findings
 
-These were found while parsing the code and are documented here so they're visible.
-The **Rocchio commit** (`feat: implement Rocchio relevance feedback for topic
-embeddings`) fixed several of the items below (marked ✅) and introduced one new
-regression (#13). The remaining items are still open.
+Most of the findings that used to live in this section were fixed by the
+correctness pass on this branch (2026-07). Summary of what changed and what's
+still open:
 
-### Correctness bugs (pipeline)
+### Fixed
 
-1. ✅ **Fixed — `nodes/topicEmbed.py` wrong model + dropped result.**
-   Previously it called `client.embeddings.create(model=MODEL, ...)` with the **chat**
-   model `MODEL` (`"gpt-4.1-mini"`) and returned `{"topicEmbedding": ...}`, a key
-   `GlobalState` doesn't define. The Rocchio commit hard-codes
-   `model='text-embedding-3-small'` and returns `{"topicCentroid": ...}`. (The now-unused
-   `from ...extractionService import MODEL` import is still present but harmless.)
+- **Browser fallback was silently dead.** `extractionService.py` did
+  `from datetime import time` and then called `time.monotonic()` — an instant
+  `AttributeError` swallowed by the fetch's exception handler, so the
+  SeleniumBase tier never once returned HTML. Now `import time` (the module),
+  and a total fetch failure records a `failed` run with
+  `failure_reason='fetch_failed'` instead of burning an LLM call on empty text.
+  The winning tier is recorded in `extraction_runs.extraction_strategy`.
+- **Embeddings were orphaned from their text.** `extracted_units` rows now
+  carry `content` and `semantic_type` alongside each `embedding`
+  (`embed_pending` zips batch rows with the returned vectors, `strict=True`),
+  so a similarity hit can always show the sentence it encodes.
+- **Re-extract loop double-counted state.** `topicIds`/`sourceIds` used
+  `operator.add` reducers, so the old "reset" (`{"topicIds": []}`) was a no-op
+  and nodes returning the whole state doubled the channels each pass. They now
+  use an `add_or_reset` reducer (write `None` to clear), all nodes return
+  partial updates, `reconcileSources` performs the reset after reading the old
+  ids, and `route_after_centroid` caps the loop at `MAX_ITERATIONS`.
+- **Join-edge stall on iteration 2.** The
+  `["embedTopic", "feedbackInterrupt"] → centroidEmbedding` barrier could
+  never re-fire on a re-extract pass (embedTopic only runs from START); the
+  edge is now simply `feedbackInterrupt → centroidEmbedding`.
+- **Hardcoded Supabase connection.** Moved to env-driven `src/app/config.py`
+  (pydantic-settings). The baked-in defaults are the CLI's public local-dev
+  values, so `supabase start` still works with zero config. See `.env.example`.
+- **`sourceDiscoveryService` prompt typos + unvalidated LLM JSON.** The stray
+  `s` and no-op statement are gone, and discovered sources are validated with a
+  pydantic model before insert (invalid entries are dropped and logged).
+  Note: `gpt-5.4` is a **real, valid model id** (released 2026-03) — an earlier
+  version of this README wrongly flagged it as a bug.
+- **`getSources` filtered the wrong column** (`id` instead of `topic_id`).
+- **Schema drift.** The code inserts `extraction_runs.topic_id`, which the
+  initial migration never declared; migration
+  `20260724120000_extraction_runs_topic_id.sql` captures it.
+- **`embedUnits` contract.** Returns a partial `{"sourceIds": [...]}` update
+  and tolerates a missing `source_ids` key; its tests match the real contract.
+- **Tooling.** `openai`/`langchain-core`/`pydantic-settings` are declared
+  direct dependencies; a bare `uv run pytest` works (the seleniumbase/
+  pytest-html plugins are disabled via `addopts`); the broken live-Supabase
+  `test_topicExtractor.py` was replaced by a mocked unit test.
 
-2. **`services/sourceDiscoveryService.py` — invalid model + prompt typos.**
-   `ChatOpenAI(model="gpt-5.4")` is not a real model id and will fail at call time.
-   The prompt string has a **stray `s`** on its own line, and there is a no-op
-   statement `metadata["topic_text"]` (line ~35) that does nothing.
+### Still open
 
-3. **Embeddings are orphaned from their text.**
-   `runExtractor`/`extractionService` store atomic units **inside**
-   `extraction_runs.metadata` (JSON). `embeddingService.embed_pending` then reads
-   that JSON, embeds each unit's `text`, and calls `updateUnitEmbeddings` — which
-   **inserts** brand-new `extracted_units` rows containing only
-   `{extraction_run_id, embedding}`. The unit `content` is never written, and the
-   embeddings aren't linked back to the specific unit they came from. The repo's own
-   TODO at `db/supabaseRepository.py:129` acknowledges this ("Need to alter and
-   migrate data in metadata to create a new column called text"). Consequently
-   `tests/unit/test_embed_service.py` — which expects `{"id", "embedding"}` keyed by
-   unit id — does not match the current code.
-
-4. **`db/supabaseRepository.py` — `getSources` filters the wrong column.**
-   It does `.eq('id', topic_id)` where it should be `.eq('topic_id', topic_id)`.
-   (This method is currently unused, but the query is wrong.)
-
-5. ✅ **Fixed — `centroidEmbedding.py` / `interruptSelections.py` were stubs.**
-   `centroidEmbedding.py` used to be the bare token `import ` (a `SyntaxError`) and
-   `interruptSelections.py` was empty. The Rocchio commit implements both: the former
-   calls `TransformationService.compute_query_vector`, the latter is the human-in-the-loop
-   `interrupt()` node. Both are now wired into `graph.py`.
-
-6. ✅ **Fixed — `transformationService.py` `rocchio_embedding` signature + wiring.**
-   It's now a proper `@staticmethod` on the renamed `TransformationService` class (with
-   a divide-by-zero guard and `.tolist()` output), and it *is* wired into the graph via
-   `centroidEmbedding`. Note the **class was renamed** `transformationService` →
-   `TransformationService`; any external importer using the old name must update.
-
-### Regression introduced by the Rocchio commit
-
-13. **`nodes/embedUnits.py` — changed contract breaks its tests + can `KeyError`.**
-    To surface source ids for the new interrupt, `embedUnits` now does
-    `state['sourceIds'] = [X['id'] for X in state['source_ids']]` and `return state`
-    (the whole mutated dict) instead of the previous `return {"embedded_count": total}`.
-    Two problems:
-    - It reads `state["source_ids"]`, which isn't set on the fan-in path — the node's
-      own tests call it with only `extraction_run_ids`, so it raises `KeyError:
-      'source_ids'`. **All of `tests/node/test_embed_units.py` now fails.**
-    - Returning the full mutated `state` (rather than a partial update) is a LangGraph
-      anti-pattern and also drops the `embedded_count` the old tests asserted.
-    Decide the intended contract (likely: return a partial `{"sourceIds": [...]}` and
-    read source ids from wherever they're actually populated), then rewrite the node's
-    tests to match.
-
-### Configuration & tooling
-
-7. **Missing declared dependencies.** `pyproject.toml` imports `openai`,
-   `langchain-openai`, and `langchain-core` at runtime but doesn't list them as
-   direct dependencies. They may resolve transitively today, but that's fragile.
-
-8. **Python version drift.** `pyproject.toml` requires `>=3.13`; the `Makefile` uses
-   `python3.12`; the old README claimed 3.12. Pick one.
-
-9. **`requirements.txt` is legacy-only.** It has no `langgraph`, `openai`,
-   `langchain`, `supabase`, `trafilatura`, or `curl-cffi` — installing from it will
-   not give you a working pipeline. Use `uv sync`.
-
-10. **CI runs the wrong thing.** `.github/workflows/makefile.yml` runs
-    `make run-scraper`, which launches real Chrome browsers to scrape YouTube inside
-    GitHub Actions — slow, flaky, and unrelated to the pipeline. The `make test`
-    target references a non-existent `tests/test_execdata.py`.
-
-14. **`pytest` collection crashes out of the box.** `seleniumbase` (a legacy-scraper
-    dep) ships a pytest plugin whose `pytest_configure` reads pytest-html's `htmlpath`
-    option, and pytest-html imports `pkg_resources` — which `setuptools>=82` (pinned via
-    `setuptools>=82.0.1`) removed. So a plain `uv run pytest tests/` dies during plugin
-    load. Work around it with `-p no:seleniumbase -p no:sb_pytest -p no:html`, or drop
-    seleniumbase from the pipeline's test environment.
-
-### Security / operational
-
-11. **Hardcoded Supabase credentials.** `db/supabaseRepository.py:16-17` hardcodes the
-    local URL and `sb_secret_...` key. Even though these are local-dev values, they
-    should be read from the environment so the code works against a real project and
-    no key is committed.
-
-12. **Over-broad DB grants.** The migration grants `delete`/`truncate`/`update` to the
-    `anon` role on every table (default Supabase scaffolding). Fine locally; tighten
-    before deploying.
+- **Over-broad DB grants.** The migration grants `delete`/`truncate`/`update`
+  to the `anon` role on every table (default Supabase scaffolding). Fine
+  locally; tighten before deploying.
+- **Python version drift.** `pyproject.toml` requires `>=3.13`; the legacy
+  `Makefile` uses `python3.12`.
+- **CI still runs the legacy scraper** rather than the pipeline's test suite,
+  and `requirements.txt` remains legacy-only (use `uv sync`).
 
 ---
 

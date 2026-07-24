@@ -1,16 +1,16 @@
 """Integration test for the relevance-feedback slice of the pipeline.
 
-Wires the two nodes the Rocchio commit added — `interruptSelections` and
-`centroidEmbedding` — into a real (small) StateGraph with an in-memory
-checkpointer, then drives the human-in-the-loop cycle:
+Wires `interruptSelections` and `centroidEmbedding` into a real (small)
+StateGraph with an in-memory checkpointer, then drives the
+human-in-the-loop cycle:
 
     invoke → graph pauses at the interrupt
     resume(Command) → selection is partitioned → centroid is recomputed
 
-Only the external I/O of centroidEmbedding (repo + TransformationService) is
-mocked; the interrupt/resume and state-passing are exercised for real.
+Only the external I/O (repo + TransformationService) is mocked; the
+interrupt/resume and state-passing are exercised for real.
 """
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -22,6 +22,16 @@ from src.app.graph.nodes.interruptSelections import interruptSelections
 from src.app.graph.state import GlobalState
 
 CENTROID_MODULE = "src.app.graph.nodes.centroidEmbedding"
+INTERRUPT_MODULE = "src.app.graph.nodes.interruptSelections"
+
+SOURCE_ROWS = [
+    {"id": "s1", "source_url": "https://one.example",
+     "discovery_reason": "primary study", "priority_score": 0.9},
+    {"id": "s2", "source_url": "https://two.example",
+     "discovery_reason": "opinion piece", "priority_score": 0.4},
+    {"id": "s3", "source_url": "https://three.example",
+     "discovery_reason": "survey", "priority_score": 0.7},
+]
 
 
 def _build_graph():
@@ -45,23 +55,33 @@ async def test_interrupt_then_resume_recomputes_centroid():
         "sourceIds": ["s1", "s2", "s3"],
     }
 
-    with patch(f"{CENTROID_MODULE}.get_repo", return_value=object()), \
+    interrupt_repo = MagicMock()
+    interrupt_repo.getSourcesbyId = AsyncMock(return_value=SOURCE_ROWS)
+
+    with patch(f"{INTERRUPT_MODULE}.get_repo", return_value=interrupt_repo), \
+         patch(f"{CENTROID_MODULE}.get_repo", return_value=object()), \
          patch(f"{CENTROID_MODULE}.TransformationService") as MockService:
         MockService.return_value.compute_query_vector = AsyncMock(
             return_value=[0.0, 1.0]
         )
 
-        # First pass: the graph must pause at the human-in-the-loop interrupt.
+        # First pass: the graph must pause at the human-in-the-loop interrupt,
+        # advertising reviewable source rows (not bare UUIDs).
         first = await graph.ainvoke(inputs, config)
         assert "__interrupt__" in first
         payload = first["__interrupt__"][0].value
-        assert payload["type"] == "topic_selection"
+        assert payload["type"] == "source_selection"
         assert payload["source_ids"] == ["s1", "s2", "s3"]
+        assert payload["sources"] == SOURCE_ROWS
 
         # Resume with the user's picks; the graph runs to completion.
-        final = await graph.ainvoke(Command(resume="s1, s3"), config)
+        final = await graph.ainvoke(
+            Command(resume={"action": "end", "selected_ids": ["s1", "s3"]}),
+            config,
+        )
 
     # Selection was partitioned correctly...
+    assert final["userAction"] == "end"
     assert final["selectedSourceIds"] == ["s1", "s3"]
     assert final["nonselectedSourceIds"] == ["s2"]
 

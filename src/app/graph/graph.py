@@ -32,7 +32,13 @@ builder.add_edge(START, "topicExtractor")
 builder.add_edge(START, "embedTopic")
 builder.add_conditional_edges("topicExtractor", fan_out_sources, ["sourceDiscovery"])
 builder.add_edge("sourceDiscovery", "feedbackInterrupt")
-builder.add_edge(["embedTopic", "feedbackInterrupt"], "centroidEmbedding")
+# Deliberately NOT a joined edge with embedTopic: a ["embedTopic",
+# "feedbackInterrupt"] barrier can never re-fire on a re-extract iteration
+# (embedTopic only runs from START), which would stall the loop after the
+# second interrupt. embedTopic completes in the first superstep, so its
+# topicCentroid write is always committed long before this edge fires.
+builder.add_edge("feedbackInterrupt", "centroidEmbedding")
+builder.add_edge("embedTopic", END)
 builder.add_edge("centroidEmbedding", "routeAfterCentroid")
 builder.add_edge("reconcileSources","topicExtractor")
 graph = builder.compile(name="scrapingPipeline")

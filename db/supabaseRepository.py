@@ -1,10 +1,10 @@
 import json
-import os
 
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 from supabase import AsyncClient, create_async_client
 
+from src.app.config import settings
 from src.app.graph.state import TopicState, sourceDiscoveryState
 
 
@@ -14,12 +14,9 @@ class SupabaseRepository:
         self.client: AsyncClient | None = None
 
     async def initialize(self):
-        url="http://127.0.0.1:54321"
-        key="sb_secret_N7UND0UgjKTVK-Uodkm0Hg_xSvEMPvz"
-
         self.client = await create_async_client(
-            supabase_url=url,
-            supabase_key=key
+            supabase_url=settings.supabase_url,
+            supabase_key=settings.supabase_secret_key,
         )
     
     async def getTopicMetadata(self, id: str):
@@ -77,31 +74,28 @@ class SupabaseRepository:
         return response.data
     
 
-    ## Something feels off here , I think since we bulk added all the sources and their ids , eah source does not really have it's own node, every node is built on the topic 
-    ## now two things can be done one is an in memory queue , that means every node will have it memory to be managed 
-    ## OR I don't know how to get this done but technically every topic node will open up it's own source node after all the sources have been bulked added 
     async def getSources(self,topic_id:str):
         response = await (self.client
                           .table('sources')
                           .select('*')
-                          .eq('id',topic_id)
+                          .eq('topic_id',topic_id)
                           .execute())
-        
+
         if not response.data:
-            raise ValueError("Could not fetch the data for some reason")
-        
+            raise ValueError(f"No sources found for topic {topic_id}")
+
         return response.data
-    
+
     async def getSourcesbyId(self,source_ids:List[str]) -> List:
         response = await (self.client
                           .table("sources")
-                          .select("discovery_reason")
+                          .select("id, source_url, discovery_reason, priority_score, source_type")
                           .in_("id",source_ids)
                           .execute())
-        
+
         if not response.data:
-            raise ValueError("Data could not be fetched")
-        
+            raise ValueError(f"No sources found for ids {source_ids}")
+
         return response.data
     
     async def getExtractionMetadata(self,id):
@@ -134,13 +128,11 @@ class SupabaseRepository:
                           .table("extracted_units")
                           .insert(data)
                           .execute())
-        
+
         if not response:
             raise ValueError("Cannot add embeddings")
-        
+
         return response.data
-    ## TODO: Need to alter and migrate data in metadata to create a new column called text 
-    # where text to be embedded is to be stored 
 
     async def getEmbeddedUnits(self,source_ids:List[str]):
         response = await (
@@ -152,19 +144,27 @@ class SupabaseRepository:
         )
         return [json.loads(r["embedding"]) for r in response.data]
     
-    async def createExtractions(self,source_id,topic_id,metadata):
-        
+    async def createExtractions(self, source_id, topic_id, units,
+                                status: str = "completed",
+                                failure_reason: Optional[str] = None,
+                                extraction_strategy: Optional[str] = None,
+                                started_at: Optional[str] = None):
         response  = await (self.client
                            .table("extraction_runs")
                            .insert({
-                               "source_id":source_id,
-                                "topic_id":topic_id,
-                                "metadata":metadata
+                               "source_id": source_id,
+                               "topic_id": topic_id,
+                               "metadata": units,
+                               "status": status,
+                               "failure_reason": failure_reason,
+                               "extraction_strategy": extraction_strategy,
+                               "started_at": started_at,
+                               "completed_at": datetime.now(timezone.utc).isoformat(),
                             })
                             .select("id")
                             .execute())
-        
+
         if not response.data:
-            raise ValueError("Failed to create sources")
+            raise ValueError("Failed to create extraction run")
 
         return response.data

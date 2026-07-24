@@ -5,8 +5,8 @@ import numpy as np
 from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 
-from src.app.config import settings
 from db.supabaseRepository import SupabaseRepository
+from src.app.config import settings
 
 logger = logging.getLogger(__name__)
 

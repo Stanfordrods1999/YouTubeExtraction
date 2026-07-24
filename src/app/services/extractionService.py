@@ -4,16 +4,17 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Literal
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel
+
 import trafilatura
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 from seleniumbase import SB
 
+from db.supabaseRepository import SupabaseRepository
 from src.app.config import settings
 from src.app.prompts.transformation import build_atomic_unit_messages
-from db.supabaseRepository import SupabaseRepository
 
 SCHEMA_TYPES = {"Article", "NewsArticle", "BlogPosting", "Product",
                 "Review", "Recipe", "Report", "QAPage", "FAQPage"}
@@ -35,7 +36,7 @@ class AtomicUnit(BaseModel):
 class UnitsResponse(BaseModel):
     units: list[AtomicUnit]
 
-class extractionService:
+class ExtractionService:
     def __init__(self, topic_id: str, source_url: str, source_id: str, repo: SupabaseRepository):
         self.repo = repo
         self.topic_id = topic_id

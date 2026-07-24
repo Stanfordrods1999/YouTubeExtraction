@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from db.session import init_repo, get_repo
+from db.session import get_repo, init_repo
 from src.app.services.queryService import QueryService
 
 

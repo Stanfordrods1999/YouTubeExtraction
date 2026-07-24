@@ -3,8 +3,8 @@ from typing import List, Optional
 
 import numpy as np
 
-from src.app.config import settings
 from db.supabaseRepository import SupabaseRepository
+from src.app.config import settings
 
 
 class TransformationService:

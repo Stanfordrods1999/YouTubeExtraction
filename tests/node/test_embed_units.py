@@ -25,7 +25,7 @@ def make_repo():
 
 
 def make_service_factory(counts_by_run_id, created):
-    """Returns a fake embeddingService class.
+    """Returns a fake EmbeddingService class.
 
     counts_by_run_id: dict e_run_id -> int returned by embed_pending()
     created: list that records (repo, e_run_id) for each construction
@@ -45,7 +45,7 @@ async def test_empty_run_ids_builds_no_service_and_returns_empty_source_ids():
     created = []
     repo = make_repo()
     with patch(f"{MODULE}.get_repo", return_value=repo) as mock_get_repo, \
-         patch(f"{MODULE}.embeddingService",
+         patch(f"{MODULE}.EmbeddingService",
                side_effect=make_service_factory({}, created)):
         result = await embedUnits({"extraction_run_ids": [], "source_ids": []})
 
@@ -59,7 +59,7 @@ async def test_empty_run_ids_builds_no_service_and_returns_empty_source_ids():
 async def test_missing_source_ids_key_is_tolerated():
     # A defensive path: fan-in state without source_ids must not KeyError.
     with patch(f"{MODULE}.get_repo", return_value=make_repo()), \
-         patch(f"{MODULE}.embeddingService",
+         patch(f"{MODULE}.EmbeddingService",
                side_effect=make_service_factory({}, [])):
         result = await embedUnits({"extraction_run_ids": []})
 
@@ -76,7 +76,7 @@ async def test_embeds_dedupes_marks_sources_and_surfaces_ids_in_order():
         {"id": "src-b", "source_url": "https://b.example"},
     ]
     with patch(f"{MODULE}.get_repo", return_value=repo), \
-         patch(f"{MODULE}.embeddingService",
+         patch(f"{MODULE}.EmbeddingService",
                side_effect=make_service_factory(counts, created)):
         result = await embedUnits({
             "extraction_run_ids": ["run-1", "run-2"],
@@ -102,7 +102,7 @@ async def test_runs_with_nothing_embedded_are_not_deduped():
     # Skipped/empty runs (idempotent re-entry) must not pay a dedupe pass.
     repo = make_repo()
     with patch(f"{MODULE}.get_repo", return_value=repo), \
-         patch(f"{MODULE}.embeddingService",
+         patch(f"{MODULE}.EmbeddingService",
                side_effect=make_service_factory({"run-1": 0}, [])):
         await embedUnits({"extraction_run_ids": ["run-1"], "source_ids": []})
 
@@ -115,7 +115,7 @@ async def test_duplicate_run_ids_are_deduplicated():
     # must collapse them so each run is embedded exactly once.
     created = []
     with patch(f"{MODULE}.get_repo", return_value=make_repo()), \
-         patch(f"{MODULE}.embeddingService",
+         patch(f"{MODULE}.EmbeddingService",
                side_effect=make_service_factory({"run-1": 4}, created)):
         await embedUnits({
             "extraction_run_ids": ["run-1", "run-1", "run-1"],
@@ -135,6 +135,6 @@ async def test_embed_pending_exception_propagates():
         return svc
 
     with patch(f"{MODULE}.get_repo", return_value=make_repo()), \
-         patch(f"{MODULE}.embeddingService", side_effect=factory):
+         patch(f"{MODULE}.EmbeddingService", side_effect=factory):
         with pytest.raises(ValueError, match="boom"):
             await embedUnits({"extraction_run_ids": ["run-1"], "source_ids": []})

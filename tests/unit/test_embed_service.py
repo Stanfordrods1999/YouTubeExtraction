@@ -1,4 +1,4 @@
-"""Unit tests for embeddingService.embed_pending.
+"""Unit tests for EmbeddingService.embed_pending.
 
 Contract: read the pending unit dicts from the run's metadata blob, embed
 their texts in batches, and insert *complete* extracted_units rows —
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.app.services.embeddingServices import embeddingService, BATCH_SIZE
+from src.app.services.embeddingServices import BATCH_SIZE, EmbeddingService
 
 MODULE = "src.app.services.embeddingServices"
 
@@ -52,7 +52,7 @@ async def test_no_pending_units_returns_zero_and_never_calls_openai():
     repo = make_repo([])
     client = make_openai_mock([])
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
-        svc = embeddingService(repo=repo, e_run_id="run-1")
+        svc = EmbeddingService(repo=repo, e_run_id="run-1")
         result = await svc.embed_pending()
 
     assert result == 0
@@ -67,7 +67,7 @@ async def test_already_embedded_run_is_skipped_idempotently():
     repo = make_repo([make_unit(0)], already_embedded=True)
     client = make_openai_mock([])
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
-        svc = embeddingService(repo=repo, e_run_id="run-1")
+        svc = EmbeddingService(repo=repo, e_run_id="run-1")
         result = await svc.embed_pending()
 
     assert result == 0
@@ -80,7 +80,7 @@ async def test_legacy_bare_list_metadata_still_embeds():
     repo = make_repo([make_unit(0)], legacy_shape=True)
     client = make_openai_mock([[[0.1]]])
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
-        svc = embeddingService(repo=repo, e_run_id="run-1")
+        svc = EmbeddingService(repo=repo, e_run_id="run-1")
         result = await svc.embed_pending()
 
     assert result == 1
@@ -94,7 +94,7 @@ async def test_inserts_content_and_semantic_type_with_each_embedding():
     client = make_openai_mock([vectors])
 
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
-        svc = embeddingService(repo=repo, e_run_id="run-1")
+        svc = EmbeddingService(repo=repo, e_run_id="run-1")
         result = await svc.embed_pending()
 
     assert result == 2
@@ -125,7 +125,7 @@ async def test_batches_split_at_batch_size():
     ])
 
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
-        svc = embeddingService(repo=repo, e_run_id="run-1")
+        svc = EmbeddingService(repo=repo, e_run_id="run-1")
         result = await svc.embed_pending()
 
     assert result == n
@@ -142,7 +142,7 @@ async def test_embedding_count_mismatch_raises_instead_of_misattributing():
     client = make_openai_mock([[[0.1, 0.2]]])   # only ONE vector for two texts
 
     with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
-        svc = embeddingService(repo=repo, e_run_id="run-1")
+        svc = EmbeddingService(repo=repo, e_run_id="run-1")
         with pytest.raises(ValueError):
             await svc.embed_pending()
 

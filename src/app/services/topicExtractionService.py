@@ -1,13 +1,16 @@
+from datetime import datetime, timezone
+from typing import List
+
+from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from langchain_core.output_parsers import JsonOutputParser
-from src.app.config import settings
-from db.supabaseRepository import SupabaseRepository
-from src.app.graph.state import TopicState
-from typing import List
-from datetime import datetime, timezone
 
-class topicExtractionService:
+from db.supabaseRepository import SupabaseRepository
+from src.app.config import settings
+from src.app.graph.state import TopicState
+
+
+class TopicExtractionService:
 
     def __init__(self, repo: SupabaseRepository):
         self.repo = repo

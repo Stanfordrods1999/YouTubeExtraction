@@ -1,4 +1,4 @@
-"""Unit tests for extractionService: the fetch-failure short-circuit, source
+"""Unit tests for ExtractionService: the fetch-failure short-circuit, source
 status transitions, and token-usage capture from the include_raw decomposer.
 The chat model and fetch tiers are mocked — no network."""
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,8 +7,8 @@ import pytest
 
 from src.app.services.extractionService import (
     AtomicUnit,
+    ExtractionService,
     UnitsResponse,
-    extractionService,
 )
 
 MODULE = "src.app.services.extractionService"
@@ -29,7 +29,7 @@ def make_service(repo, decomposer_result=None, decomposer_error=None):
         else:
             decomposer.ainvoke = AsyncMock(return_value=decomposer_result)
         MockChat.return_value.with_structured_output.return_value = decomposer
-        svc = extractionService("top-1", "https://x.example", "src-1", repo)
+        svc = ExtractionService("top-1", "https://x.example", "src-1", repo)
     return svc
 
 

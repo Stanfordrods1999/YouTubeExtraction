@@ -1,11 +1,10 @@
 import json
-
 from datetime import datetime, timezone
 from typing import List, Optional
-from supabase import AsyncClient, create_async_client
 
 from src.app.config import settings
 from src.app.graph.state import TopicState, sourceDiscoveryState
+from supabase import AsyncClient, create_async_client
 
 
 class SupabaseRepository:

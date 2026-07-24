@@ -1,14 +1,15 @@
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+from src.app.graph.nodes.centroidEmbedding import centroidEmbedding
+from src.app.graph.nodes.interruptSelections import interruptSelections
 from src.app.graph.nodes.reconcileSources import reconcileSources
 from src.app.graph.nodes.routeAfterCentroid import route_after_centroid
 from src.app.graph.nodes.topicEmbed import topicEmbed
 from src.app.graph.nodes.topicExtractor import topicExtractor
-from src.app.graph.subgraphs.sourceDiscovery import sourceDiscoveryGraph
-from src.app.graph.nodes.centroidEmbedding import centroidEmbedding
 from src.app.graph.state import GlobalState
-from src.app.graph.nodes.interruptSelections import interruptSelections
+from src.app.graph.subgraphs.sourceDiscovery import sourceDiscoveryGraph
+
 
 def fan_out_sources(state: GlobalState):
     """One sourceDiscovery subgraph run per topic."""

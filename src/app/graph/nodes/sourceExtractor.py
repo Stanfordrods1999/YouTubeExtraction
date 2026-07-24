@@ -1,9 +1,9 @@
-from typing import List
 
 from db.session import get_repo
 from src.app.graph.state import sourceDiscoveryState
-from src.app.services.sourceDiscoveryService import sourceDiscoveryService
+from src.app.services.sourceDiscoveryService import SourceDiscoveryService
+
 
 async def sourceExtractor(state:sourceDiscoveryState):
-    result = await sourceDiscoveryService(get_repo()).extract(state)
+    result = await SourceDiscoveryService(get_repo()).extract(state)
     return result

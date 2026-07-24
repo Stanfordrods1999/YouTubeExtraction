@@ -1,9 +1,10 @@
-from src.app.graph.state import extractionState, sourceDiscoveryState
 from db.session import get_repo
-from src.app.services.extractionService import extractionService
+from src.app.graph.state import extractionState
+from src.app.services.extractionService import ExtractionService
+
 
 async def runExtractor(state: extractionState):
-    metadata = await extractionService(
+    metadata = await ExtractionService(
         state['topic_id'], state['source_url'], state['source_id'], get_repo()
     ).extract()
 

@@ -4,9 +4,9 @@ import logging
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ValidationError
 
+from db.supabaseRepository import SupabaseRepository
 from src.app.config import settings
 from src.app.graph.state import sourceDiscoveryState
-from db.supabaseRepository import SupabaseRepository
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class DiscoveredSource(BaseModel):
     status: str = "discovered"
 
 
-class sourceDiscoveryService:
+class SourceDiscoveryService:
     def __init__(self, repo: SupabaseRepository):
         self.repo = repo
         self.llm = ChatOpenAI(model=settings.discovery_model).bind_tools([

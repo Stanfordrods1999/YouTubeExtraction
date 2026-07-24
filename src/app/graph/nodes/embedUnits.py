@@ -1,11 +1,12 @@
-from src.app.graph.state import sourceDiscoveryState
-from src.app.services.embeddingServices import embeddingService
 from db.session import get_repo
+from src.app.graph.state import sourceDiscoveryState
+from src.app.services.embeddingServices import EmbeddingService
+
 
 async def embedUnits(state: sourceDiscoveryState):
     repo = get_repo()
     for e_run_id in set(state["extraction_run_ids"]):
-        svc = embeddingService(repo=repo, e_run_id=e_run_id)
+        svc = EmbeddingService(repo=repo, e_run_id=e_run_id)
         embedded = await svc.embed_pending()
         if embedded:
             # Collapse near-duplicates against units from other runs of the

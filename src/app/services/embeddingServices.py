@@ -1,14 +1,15 @@
 import logging
+
 from openai import AsyncOpenAI
 
-from src.app.config import settings
 from db.supabaseRepository import SupabaseRepository
+from src.app.config import settings
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 512
 
-class embeddingService:
+class EmbeddingService:
     def __init__(self,repo:SupabaseRepository,e_run_id:str):
         self.repo = repo
         self.e_run_id = e_run_id

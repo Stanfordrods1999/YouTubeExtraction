@@ -8,7 +8,6 @@ import pytest
 from evals.metrics import dcg_at_k, mrr, ndcg_at_k, precision_at_k
 from evals.run_eval import format_markdown_table, judge, mean_scores, score
 
-
 # --------------------------------------------------------------------------- #
 # metrics
 # --------------------------------------------------------------------------- #

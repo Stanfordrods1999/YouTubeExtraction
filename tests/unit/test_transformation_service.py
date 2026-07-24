@@ -11,7 +11,6 @@ import pytest
 
 from src.app.services.transformationService import TransformationService
 
-
 # --------------------------------------------------------------------------- #
 # rocchio_embedding  (α·q0 + β·mean(rel) − γ·mean(nonrel), then L2-normalised)
 # --------------------------------------------------------------------------- #

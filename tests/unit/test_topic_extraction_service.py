@@ -1,9 +1,9 @@
-"""Unit tests for topicExtractionService.extract (repo mocked, no network)."""
+"""Unit tests for TopicExtractionService.extract (repo mocked, no network)."""
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.app.services.topicExtractionService import topicExtractionService
+from src.app.services.topicExtractionService import TopicExtractionService
 
 
 @pytest.mark.asyncio
@@ -11,7 +11,7 @@ async def test_extract_persists_chain_output_and_returns_ids():
     repo = MagicMock()
     repo.createTopic = AsyncMock(return_value=["id-1", "id-2"])
 
-    service = topicExtractionService(repo)
+    service = TopicExtractionService(repo)
     fake_topics = [
         {"topicText": "Cursor AI", "status": "pending", "createdBy": "system",
          "confidence": 0.91, "metadata": {}},

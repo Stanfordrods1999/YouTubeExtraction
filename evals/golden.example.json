@@ -1,0 +1,21 @@
+[
+  {
+    "name": "quantum-error-correction",
+    "thread_id": "qec-demo",
+    "queries": [
+      {
+        "question": "How do surface codes detect and correct qubit errors?",
+        "relevant_source_urls": [
+          "https://example.com/surface-codes-explained",
+          "https://example.com/qec-review-2025"
+        ]
+      },
+      {
+        "question": "What error thresholds do modern QEC schemes achieve?",
+        "relevant_source_urls": [
+          "https://example.com/qec-review-2025"
+        ]
+      }
+    ]
+  }
+]

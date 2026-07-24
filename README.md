@@ -398,6 +398,26 @@ All suites are mock-only (no live Supabase or OpenAI) and pass:
 
 ---
 
+## Does relevance feedback actually help? (evals)
+
+`evals/` measures the Rocchio loop instead of assuming it works: for each
+topic in a golden set it compares retrieval with the raw question embedding,
+the question blended with the **initial** centroid, and the question blended
+with the **Rocchio-refined** centroid — on P@k, MRR, and nDCG@k. Relevance
+labels are source-level (the same signal the selection interrupt collects),
+so no per-unit labeling is needed.
+
+```bash
+uv run python -m evals.run_eval --golden evals/golden.json --k 10
+```
+
+See [`evals/README.md`](evals/README.md) for the full workflow (run a topic →
+select sources → author queries → run). The metric functions are pure and
+covered by `tests/unit/test_eval_metrics.py`; results tables from real runs
+belong here once generated.
+
+---
+
 ## Known Issues / Review Findings
 
 Most of the findings that used to live in this section were fixed by the

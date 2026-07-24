@@ -36,10 +36,13 @@ def make_openai_mock(embeddings_per_call):
     return client
 
 
-def make_repo(units):
+def make_repo(units, already_embedded=False, legacy_shape=False):
     repo = MagicMock()
-    # getUnEmbeddedUnits returns the run row; units live under "metadata".
-    repo.getUnEmbeddedUnits = AsyncMock(return_value={"metadata": units})
+    repo.hasEmbeddedUnits = AsyncMock(return_value=already_embedded)
+    # getUnEmbeddedUnits returns the run row; units live under
+    # metadata["units"] (older rows stored the bare list).
+    metadata = units if legacy_shape else {"units": units, "usage": {}}
+    repo.getUnEmbeddedUnits = AsyncMock(return_value={"metadata": metadata})
     repo.updateUnitEmbeddings = AsyncMock()
     return repo
 
@@ -56,6 +59,31 @@ async def test_no_pending_units_returns_zero_and_never_calls_openai():
     repo.getUnEmbeddedUnits.assert_awaited_once_with(e_run_id="run-1")
     client.embeddings.create.assert_not_awaited()
     repo.updateUnitEmbeddings.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_already_embedded_run_is_skipped_idempotently():
+    # Retries / resumed threads must not embed (and pay for) a run twice.
+    repo = make_repo([make_unit(0)], already_embedded=True)
+    client = make_openai_mock([])
+    with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
+        svc = embeddingService(repo=repo, e_run_id="run-1")
+        result = await svc.embed_pending()
+
+    assert result == 0
+    repo.getUnEmbeddedUnits.assert_not_awaited()
+    client.embeddings.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_legacy_bare_list_metadata_still_embeds():
+    repo = make_repo([make_unit(0)], legacy_shape=True)
+    client = make_openai_mock([[[0.1]]])
+    with patch(f"{MODULE}.AsyncOpenAI", return_value=client):
+        svc = embeddingService(repo=repo, e_run_id="run-1")
+        result = await svc.embed_pending()
+
+    assert result == 1
 
 
 @pytest.mark.asyncio

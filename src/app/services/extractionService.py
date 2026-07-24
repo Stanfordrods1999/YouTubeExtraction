@@ -42,8 +42,10 @@ class extractionService:
         self.source_url = source_url
         self.source_id = source_id
         self.client = ChatOpenAI(model=settings.chat_model, temperature=0)
+        # include_raw=True keeps the AIMessage so token usage can be recorded
+        # on the run alongside the parsed units.
         self.decomposer = self.client.with_structured_output(
-            UnitsResponse, method="json_mode"
+            UnitsResponse, method="json_mode", include_raw=True
         )
 
     def _extract_jsonld(self, html: str) -> list[dict]:
@@ -81,7 +83,8 @@ class extractionService:
                 return item.get("headline") or item.get("name")
         return None
 
-    async def _make_atomic_units(self, metadata: dict) -> list[dict]:
+    async def _make_atomic_units(self, metadata: dict) -> tuple[list[dict], dict]:
+        """Returns (unit rows, token usage for the decomposition call)."""
         messages = build_atomic_unit_messages(
             metadata["readable_text"],
             title=self._title_from_structured(metadata["structured"]),
@@ -89,17 +92,24 @@ class extractionService:
             topic=None,
         )
         try:
-            result: UnitsResponse = await self.decomposer.ainvoke(messages)
+            result = await self.decomposer.ainvoke(messages)
         except Exception as e:
             logger.warning("Decomposition failed for %s: %s", self.source_url, e)
-            return []
+            return [], {}
+
+        usage = dict(getattr(result.get("raw"), "usage_metadata", None) or {})
+        parsed: UnitsResponse | None = result.get("parsed")
+        if parsed is None:
+            logger.warning("Decomposition unparseable for %s: %s",
+                           self.source_url, result.get("parsing_error"))
+            return [], usage
 
         return [{
             "source_id": self.source_id,
             "topic_id": self.topic_id,
             "text": u.text,
             "kind": u.kind,
-        } for u in result.units]
+        } for u in parsed.units], usage
 
     async def extract(self) -> dict:
         started_at = datetime.now(timezone.utc).isoformat()
@@ -108,20 +118,24 @@ class extractionService:
         if html is None:
             # Every fetch tier failed: record the failure instead of burning an
             # LLM call on empty text and storing a junk run.
-            return await self.repo.createExtractions(
+            run = await self.repo.createExtractions(
                 self.source_id, self.topic_id, [],
                 status="failed", failure_reason="fetch_failed",
                 started_at=started_at,
             )
+            await self.repo.updateSourceStatus([self.source_id], "failed")
+            return run
 
         metadata = self.build_extraction_input(html, self.source_url)
-        unit_rows = await self._make_atomic_units(metadata)
+        unit_rows, usage = await self._make_atomic_units(metadata)
 
-        return await self.repo.createExtractions(
+        run = await self.repo.createExtractions(
             self.source_id, self.topic_id, unit_rows,
             status="completed", extraction_strategy=strategy,
-            started_at=started_at,
+            started_at=started_at, usage=usage,
         )
+        await self.repo.updateSourceStatus([self.source_id], "extracted")
+        return run
 
 
 

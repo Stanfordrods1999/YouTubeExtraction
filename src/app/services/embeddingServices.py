@@ -15,8 +15,18 @@ class embeddingService:
         self.client = AsyncOpenAI()
 
     async def embed_pending(self) -> int:
-        rows = await self.repo.getUnEmbeddedUnits(e_run_id=self.e_run_id)
-        rows = rows['metadata']
+        # Idempotency: retries and resumed threads re-enter this path; a run
+        # whose units are already stored must not be embedded (and paid for)
+        # twice.
+        if await self.repo.hasEmbeddedUnits(self.e_run_id):
+            logger.info("Run %s already embedded; skipping.", self.e_run_id)
+            return 0
+
+        run = await self.repo.getUnEmbeddedUnits(e_run_id=self.e_run_id)
+        metadata = run['metadata']
+        # Current shape: {"units": [...], "usage": {...}}; older rows stored
+        # the bare unit list.
+        rows = metadata.get("units", []) if isinstance(metadata, dict) else metadata
         if not rows:
             return 0
 

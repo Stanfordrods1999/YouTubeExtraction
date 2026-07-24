@@ -61,16 +61,30 @@ class SupabaseRepository:
         ]
     
     async def createSources(self,data:List[sourceDiscoveryState]):
+        # Upsert on (topic_id, source_url): node retries and re-runs must not
+        # duplicate sources — the RetryPolicy re-executes the whole discovery
+        # node on transient DB errors.
         response = (
             await self.client
             .table("sources")
-            .insert(data).select('*')
+            .upsert(data, on_conflict="topic_id,source_url")
             .execute()
         )
 
         if not response.data:
             raise ValueError("Failed to create sources")
 
+        return response.data
+
+    async def updateSourceStatus(self, source_ids: List[str], status: str,
+                                 exclude_failed: bool = False):
+        query = (self.client
+                 .table("sources")
+                 .update({"status": status})
+                 .in_("id", source_ids))
+        if exclude_failed:
+            query = query.neq("status", "failed")
+        response = await query.execute()
         return response.data
     
 
@@ -117,11 +131,43 @@ class SupabaseRepository:
                           .eq("id",e_run_id).single()
                           .execute()
                           )
-        
+
         if not response.data:
-            raise ValueError
-        
+            raise ValueError(f"Extraction run {e_run_id} not found")
+
         return response.data
+
+    async def hasEmbeddedUnits(self, e_run_id: str) -> bool:
+        """True if this run's units were already embedded — makes
+        embed_pending safe to re-run (retries, resumed threads)."""
+        response = await (self.client
+                          .table("extracted_units")
+                          .select("id")
+                          .eq("extraction_run_id", e_run_id)
+                          .limit(1)
+                          .execute())
+        return bool(response.data)
+
+    async def getUnitsBySources(self, source_ids: List[str],
+                                limit: int = 30) -> List[str]:
+        """Unit texts extracted from the given sources (for the re-extract
+        brief). Follows the getEmbeddedUnits join pattern."""
+        response = await (self.client
+                          .table("extracted_units")
+                          .select("content, extraction_runs!inner()")
+                          .in_("extraction_runs.source_id", source_ids)
+                          .limit(limit)
+                          .execute())
+        return [r["content"] for r in (response.data or []) if r.get("content")]
+
+    async def dedupeUnits(self, e_run_id: str, threshold: float = 0.95) -> int:
+        """Collapse this run's near-duplicate units into canonical ones
+        (bumping corroboration_count) via the dedupe_units RPC."""
+        response = await self.client.rpc("dedupe_units", {
+            "run_id": e_run_id,
+            "threshold": threshold,
+        }).execute()
+        return response.data if isinstance(response.data, int) else 0
     
     async def updateUnitEmbeddings(self,data):
         response = await (self.client
@@ -202,13 +248,14 @@ class SupabaseRepository:
                                 status: str = "completed",
                                 failure_reason: Optional[str] = None,
                                 extraction_strategy: Optional[str] = None,
-                                started_at: Optional[str] = None):
+                                started_at: Optional[str] = None,
+                                usage: Optional[dict] = None):
         response  = await (self.client
                            .table("extraction_runs")
                            .insert({
                                "source_id": source_id,
                                "topic_id": topic_id,
-                               "metadata": units,
+                               "metadata": {"units": units, "usage": usage or {}},
                                "status": status,
                                "failure_reason": failure_reason,
                                "extraction_strategy": extraction_strategy,

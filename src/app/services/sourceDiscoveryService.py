@@ -97,4 +97,9 @@ class sourceDiscoveryService:
 
         response = await self.llm.ainvoke(prompt)
 
+        usage = getattr(response, "usage_metadata", None)
+        if usage:
+            logger.info("Source discovery for %r used %s tokens",
+                        metadata.get("topic_text"), usage.get("total_tokens"))
+
         return response

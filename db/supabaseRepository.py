@@ -134,6 +134,60 @@ class SupabaseRepository:
 
         return response.data
 
+    async def matchUnits(self, query_embedding: List[float], k: int = 10,
+                         topic_id: Optional[str] = None) -> List[dict]:
+        """Top-k nearest units with citation fields, via the match_units RPC
+        (HNSW-indexed cosine search in Postgres)."""
+        response = await self.client.rpc("match_units", {
+            "query_embedding": query_embedding,
+            "match_count": k,
+            "filter_topic": topic_id,
+        }).execute()
+        return response.data or []
+
+    async def saveCentroid(self, thread_id: str, kind: str,
+                           centroid: List[float],
+                           topic_text: Optional[str] = None,
+                           iteration: int = 0):
+        response = await (self.client
+                          .table("topic_centroids")
+                          .insert({
+                              "thread_id": thread_id,
+                              "kind": kind,
+                              "centroid": centroid,
+                              "topic_text": topic_text,
+                              "iteration": iteration,
+                          })
+                          .execute())
+        if not response.data:
+            raise ValueError("Failed to save centroid")
+        return response.data
+
+    async def getLatestCentroid(self, thread_id: str,
+                                kind: Optional[str] = None) -> Optional[List[float]]:
+        query = (self.client
+                 .table("topic_centroids")
+                 .select("centroid")
+                 .eq("thread_id", thread_id))
+        if kind is not None:
+            query = query.eq("kind", kind)
+        response = await (query
+                          .order("created_at", desc=True)
+                          .limit(1)
+                          .execute())
+        if not response.data:
+            return None
+        centroid = response.data[0]["centroid"]
+        return json.loads(centroid) if isinstance(centroid, str) else centroid
+
+    async def getTopics(self) -> List[dict]:
+        response = await (self.client
+                          .table("topics")
+                          .select("*")
+                          .order("created_at", desc=True)
+                          .execute())
+        return response.data or []
+
     async def getEmbeddedUnits(self,source_ids:List[str]):
         response = await (
             self.client

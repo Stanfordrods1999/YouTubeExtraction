@@ -57,9 +57,11 @@ async def test_interrupt_then_resume_recomputes_centroid():
 
     interrupt_repo = MagicMock()
     interrupt_repo.getSourcesbyId = AsyncMock(return_value=SOURCE_ROWS)
+    centroid_repo = MagicMock()
+    centroid_repo.saveCentroid = AsyncMock()
 
     with patch(f"{INTERRUPT_MODULE}.get_repo", return_value=interrupt_repo), \
-         patch(f"{CENTROID_MODULE}.get_repo", return_value=object()), \
+         patch(f"{CENTROID_MODULE}.get_repo", return_value=centroid_repo), \
          patch(f"{CENTROID_MODULE}.TransformationService") as MockService:
         MockService.return_value.compute_query_vector = AsyncMock(
             return_value=[0.0, 1.0]

@@ -335,6 +335,33 @@ final = await graph.ainvoke(
 > (the LangGraph dev server / API does). A bare `graph.ainvoke(...)` with no
 > checkpointer cannot pause and resume.
 
+### Querying the knowledge base (the read path)
+
+Once a run has populated the store, the FastAPI app (served alongside the graph
+by `langgraph dev`) exposes retrieval with citations. Similarity search runs
+inside Postgres via the `match_units` RPC over an HNSW index — vectors never
+ship to Python for scoring.
+
+```bash
+# Top-k atomic facts nearest the question, each with its source URL + reason
+curl -s localhost:2024/query -X POST -H 'content-type: application/json' \
+  -d '{"question": "How do surface codes correct errors?", "k": 5}'
+
+# Same retrieval, then a synthesized answer with [n] citations
+curl -s localhost:2024/answer -X POST -H 'content-type: application/json' \
+  -d '{"question": "How do surface codes correct errors?"}'
+
+# Browse what a run built
+curl -s localhost:2024/topics
+curl -s localhost:2024/topics/<topic_id>/sources
+```
+
+Pass `"thread_id": "<graph thread id>"` to either endpoint to **blend that
+run's Rocchio-refined centroid into the query vector** (weighted sum,
+L2-normalised) — retrieval then leans toward what the human marked relevant.
+Both the initial and refined centroids are persisted per thread in
+`topic_centroids` by `embedTopic` / `centroidEmbedding`.
+
 ### The legacy scraper
 
 See [Legacy: the YouTube scraper](#legacy-the-youtube-scraper).

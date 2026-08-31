@@ -21,17 +21,31 @@ class embeddingService:
             return 0
         
         done = 0
-        for i in range(0, len(rows), BATCH_SIZE):
-            batch = rows[i : i + BATCH_SIZE]
+        for offset in range(0, len(rows), BATCH_SIZE):
+            batch = rows[offset : offset + BATCH_SIZE]
             texts = [r["text"] for r in batch]
 
             resp = await self.client.embeddings.create(model=EMBED_MODEL, input=texts)
+
+            # The API documents `index` precisely because the order of `data` is
+            # not guaranteed to match the order of `input`. Sorting by it is what
+            # makes the zip below a real pairing rather than a coincidence.
+            vectors = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+
+            # `content` is the text that produced the vector, carried through so a
+            # nearest-neighbour hit can be read back. Without it the embedding is
+            # an orphan: findable, but unreadable.
             updates = [
-                {"extraction_run_id": self.e_run_id, "embedding": embedding.embedding}
-                for embedding in resp.data
+                {
+                    "extraction_run_id": self.e_run_id,
+                    "unit_index":        offset + i,
+                    "content":           row["text"],
+                    "semantic_type":     row.get("kind"),
+                    "embedding":         vector,
+                }
+                for i, (row, vector) in enumerate(zip(batch, vectors, strict=True))
             ]
             await self.repo.updateUnitEmbeddings(updates)
             done += len(updates)
 
         return done
-        

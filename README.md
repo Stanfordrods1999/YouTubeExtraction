@@ -187,7 +187,7 @@ YouTubeExtraction/
 │
 ├── tests/
 │   ├── node/test_embed_units.py    # Unit tests for the embedUnits node (solid)
-│   ├── unit/test_embed_service.py  # Tests the *intended* embed_pending shape (see Known Issues)
+│   ├── unit/test_embed_service.py  # embed_pending: text↔vector pairing, unit_index, strict zip
 │   ├── integration/test_topicExtractor.py  # Currently broken (see Known Issues)
 │   └── execdata.py                 # Legacy scraper smoke test
 │
@@ -216,7 +216,7 @@ topics ──1:N──► sources ──1:N──► extraction_runs ──1:N�
 | `topics` | `id`, `topic_text`, `status`, `created_by`, `confidence`, `metadata` (jsonb) | One row per (sub)topic produced by `topicExtractor`. |
 | `sources` | `id`, `topic_id` (FK), `source_type`, `source_url`, `discovery_reason`, `priority_score`, `status` | Web sources discovered per topic. |
 | `extraction_runs` | `id`, `source_id` (FK), `status`, `confidence`, `metadata` (jsonb) | One run per source fetch/extraction. Atomic units are currently stored **inside `metadata`** as JSON. |
-| `extracted_units` | `id`, `extraction_run_id` (FK), `semantic_type`, `content`, `confidence`, `embedding vector(1536)` | Intended home for individual atomic units + their embeddings. See Known Issues — the code doesn't fully populate this yet. The Rocchio step reads embeddings back via `getEmbeddedUnits`, joining `extracted_units → extraction_runs` on `source_id`. |
+| `extracted_units` | `id`, `extraction_run_id` (FK), `unit_index`, `semantic_type`, `content`, `confidence`, `embedding vector(1536)` | Individual atomic units + their embeddings. `content` is the unit's `text` — the exact string that was embedded — and `unit_index` is its ordinal in `extraction_runs.metadata`; together with `extraction_run_id` that ordinal is the upsert key. The Rocchio step reads embeddings back via `getEmbeddedUnits`, joining `extracted_units → extraction_runs` on `source_id`. |
 
 > The migration grants full DML (including `delete`/`truncate`) to the `anon` role.
 > That is the default Supabase scaffolding and is fine for local dev, but must be
@@ -344,7 +344,7 @@ uv run pytest -p no:seleniumbase -p no:sb_pytest -p no:html tests/ -v
 | Suite | State |
 | --- | --- |
 | `tests/node/test_embed_units.py` | **⚠️ Broken by the Rocchio commit.** The node now returns the whole mutated `state` (not `{"embedded_count": ...}`) and reads `state["source_ids"]`, so every assertion here fails and the empty-input case raises `KeyError`. These tests still describe the *old* contract and need rewriting (or the node needs revisiting — see Known Issues). |
-| `tests/unit/test_embed_service.py` | **Aspirational.** Asserts an id-keyed `{"id", "embedding"}` update shape that the current `embeddingService`/repo don't produce — documents the intended fix rather than current behavior. |
+| `tests/unit/test_embed_service.py` | ✅ **Passing.** Rewritten against the real `extraction_runs.metadata` row shape (`{kind, text, topic_id, source_id}`). Asserts each vector is stored with its own `content`, that the pairing survives an out-of-order `resp.data`, that `unit_index` keeps counting across batches, and that a short response raises instead of misaligning. |
 | `tests/integration/test_topicExtractor.py` | **Broken.** Passes `llm=None` to a constructor that doesn't accept it and asserts `result is List[str]`. Also hits a live local Supabase. |
 | `tests/execdata.py` | Legacy scraper smoke test; launches a real browser. |
 
@@ -373,9 +373,10 @@ Supabase or OpenAI — and all pass under the command above):
 - **A full-graph resume test** (`graph.py`) once the upstream nodes it depends on
   (`sourceDiscoveryService` model id, `embedUnits` return shape) are fixed — currently
   a real end-to-end run can't reach the interrupt.
-- **`embed_pending` tests against real repo/OpenAI shapes** (the aspirational
-  `test_embed_service.py` should become executable once the metadata→`extracted_units`
-  migration lands).
+- **A live integration test for the write path** — `test_embed_service.py` now
+  matches the real metadata and update shapes, but the upsert on
+  `(extraction_run_id, unit_index)` is only exercised against a mock; its idempotence
+  needs a seeded local Supabase to prove.
 
 > The `Makefile` `test` target points at `tests/test_execdata.py`, which does not
 > exist (the file is `tests/execdata.py`).
@@ -403,17 +404,29 @@ regression (#13). The remaining items are still open.
    The prompt string has a **stray `s`** on its own line, and there is a no-op
    statement `metadata["topic_text"]` (line ~35) that does nothing.
 
-3. **Embeddings are orphaned from their text.**
+3. ✅ **Fixed — embeddings were orphaned from their text.**
    `runExtractor`/`extractionService` store atomic units **inside**
-   `extraction_runs.metadata` (JSON). `embeddingService.embed_pending` then reads
-   that JSON, embeds each unit's `text`, and calls `updateUnitEmbeddings` — which
-   **inserts** brand-new `extracted_units` rows containing only
-   `{extraction_run_id, embedding}`. The unit `content` is never written, and the
-   embeddings aren't linked back to the specific unit they came from. The repo's own
-   TODO at `db/supabaseRepository.py:129` acknowledges this ("Need to alter and
-   migrate data in metadata to create a new column called text"). Consequently
-   `tests/unit/test_embed_service.py` — which expects `{"id", "embedding"}` keyed by
-   unit id — does not match the current code.
+   `extraction_runs.metadata` (JSON). `embeddingService.embed_pending` read that
+   JSON, embedded each unit's `text`, and called `updateUnitEmbeddings` — which
+   **inserted** brand-new `extracted_units` rows containing only
+   `{extraction_run_id, embedding}`. The unit `content` was never written, so every
+   row in the live table has `content = null` and no stored vector could be read
+   back.
+
+   `extracted_units.content` is **the unit's `text`** — the exact string sent to the
+   embedding model. `embed_pending` now writes it alongside `semantic_type` (the
+   metadata entry's `"kind"`) and `unit_index` (its ordinal in the run's `metadata`
+   array), pairs each vector to its row via the response's documented `index` field,
+   and uses `zip(..., strict=True)` so a short response raises instead of silently
+   shifting every later text onto the wrong vector. `updateUnitEmbeddings` upserts on
+   `(extraction_run_id, unit_index)` — added by
+   `supabase/migrations/20260831101500_unit_content_alignment.sql` — so re-embedding a
+   run overwrites its rows rather than appending a second copy.
+   `SupabaseRepository.getUnitsByRun` reads text and vector back together.
+
+   **Existing rows cannot be backfilled:** their ordinal position is unrecoverable
+   (the whole batch shares one `created_at`). Run
+   `delete from extracted_units where content is null;` and re-run the embed node.
 
 4. **`db/supabaseRepository.py` — `getSources` filters the wrong column.**
    It does `.eq('id', topic_id)` where it should be `.eq('topic_id', topic_id)`.

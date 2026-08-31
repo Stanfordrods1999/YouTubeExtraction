@@ -130,17 +130,17 @@ class SupabaseRepository:
         return response.data
     
     async def updateUnitEmbeddings(self,data):
+        # Upsert, not insert: (extraction_run_id, unit_index) identifies a unit, so
+        # re-embedding a run overwrites its rows instead of appending a second copy.
         response = await (self.client
                           .table("extracted_units")
-                          .insert(data)
+                          .upsert(data,on_conflict="extraction_run_id,unit_index")
                           .execute())
         
         if not response:
             raise ValueError("Cannot add embeddings")
         
         return response.data
-    ## TODO: Need to alter and migrate data in metadata to create a new column called text 
-    # where text to be embedded is to be stored 
 
     async def getEmbeddedUnits(self,source_ids:List[str]):
         response = await (
@@ -151,6 +151,24 @@ class SupabaseRepository:
             .execute()
         )
         return [json.loads(r["embedding"]) for r in response.data]
+
+    async def getUnitsByRun(self,e_run_id:str):
+        """Read units back the way they were written: text beside vector.
+
+        This is the round-trip that proves a stored embedding is not an orphan.
+        """
+        response = await (
+            self.client
+            .table("extracted_units")
+            .select("id, unit_index, semantic_type, content, embedding")
+            .eq("extraction_run_id", e_run_id)
+            .order("unit_index")
+            .execute()
+        )
+        return [
+            {**r, "embedding": json.loads(r["embedding"]) if isinstance(r["embedding"], str) else r["embedding"]}
+            for r in response.data
+        ]
     
     async def createExtractions(self,source_id,topic_id,metadata):
         

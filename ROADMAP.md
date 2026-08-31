@@ -23,8 +23,9 @@ Supporting facts:
 - No similarity query exists anywhere in the repo. `getEmbeddedUnits` is the only
   vector read and it exists solely to compute a mean.
 - `extracted_units.embedding` is a `vector(1536)` column with **no index**.
-- `updateUnitEmbeddings` inserts rows holding only `{extraction_run_id, embedding}`,
-  so no stored vector has retrievable text attached (README Known Issue #3).
+- ~~`updateUnitEmbeddings` inserts rows holding only `{extraction_run_id, embedding}`,
+  so no stored vector has retrievable text attached (README Known Issue #3).~~
+  Fixed by 0.1 — units are now written with their `content` and `semantic_type`.
 
 The mathematics is present; the machinery is not. Tier 0 is the prerequisite for
 everything below it.
@@ -35,29 +36,47 @@ everything below it.
 
 **Blocking.** No research content. Until this lands, no later change can be observed.
 
-- [ ] **0.1 — Keep each embedding attached to its text.**
-      `embed_pending` builds `updates` from `resp.data` alone, never zipped against
-      `batch`. The OpenAI response carries an explicit `index` field precisely because
-      ordering is not guaranteed, so today's alignment is incidental.
+- [x] **0.1 — Keep each embedding attached to its text.** *(done)*
+      `embed_pending` built `updates` from `resp.data` alone, never zipped against
+      `batch`, and wrote only `{extraction_run_id, embedding}` — which is why every
+      `extracted_units` row in the live database has `content = null`. **`content` is
+      the unit's `text`**: the exact string handed to the embedding model, carried
+      through so a nearest-neighbour hit can be read back. It lives in
+      `extraction_runs.metadata[i]["text"]`; `semantic_type` is that entry's `"kind"`.
+      The OpenAI response carries an explicit `index` field precisely because ordering
+      is not guaranteed, so the old alignment was incidental.
 
       ```python
       # src/app/services/embeddingServices.py — embed_pending
       resp = await self.client.embeddings.create(model=EMBED_MODEL, input=texts)
-      vecs = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+      vectors = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
 
       updates = [
           {
               "extraction_run_id": self.e_run_id,
-              "unit_index":        i + offset,
-              "content":           r["text"],
-              "semantic_type":     r["kind"],
-              "embedding":         v,
+              "unit_index":        offset + i,
+              "content":           row["text"],
+              "semantic_type":     row.get("kind"),
+              "embedding":         vector,
           }
-          for i, (r, v) in enumerate(zip(batch, vecs))
+          for i, (row, vector) in enumerate(zip(batch, vectors, strict=True))
       ]
       ```
 
+      `strict=True` turns a short response into an error instead of sliding every
+      later text onto the wrong vector. `unit_index` is the ordinal in the run's
+      `metadata` array, which gives the unit a stable identity;
+      `updateUnitEmbeddings` upserts on `(extraction_run_id, unit_index)`, so
+      re-embedding a run overwrites rather than duplicates.
+
       *Done when:* a unit id round-trips vector → text.
+      → `SupabaseRepository.getUnitsByRun`, covered by
+      `tests/unit/test_get_embedded_units.py::test_get_units_by_run_round_trips_vector_to_text`.
+
+      **Rows written before this:** `content` and `unit_index` are null and the units'
+      positions are not recoverable (the whole batch shares one `created_at`). They
+      cannot be backfilled — `delete from extracted_units where content is null;` and
+      re-run the embed node.
 
 - [ ] **0.2 — Normalize at write time.**
       Once every stored vector has `‖v‖ = 1`, cosine and inner product coincide and the
@@ -67,16 +86,20 @@ everything below it.
 
 - [ ] **0.3 — Index the column, and measure what the index costs.**
 
-      ```sql
-      alter table extracted_units add column content text,
-                                  add column unit_index int;
-      create unique index on extracted_units (extraction_run_id, unit_index);
+      `content` already existed in the initial migration and `unit_index` plus its
+      unique index landed with 0.1
+      (`supabase/migrations/20260831101500_unit_content_alignment.sql`). What is left
+      is the vector index itself, and the measurement that justifies it:
 
+      ```sql
       create index on extracted_units
         using hnsw (embedding vector_ip_ops) with (m = 16, ef_construction = 64);
 
       set hnsw.ef_search = 100;  -- the recall/latency dial
       ```
+
+      Note `vector_ip_ops` assumes 0.2 has landed: inner product only equals cosine
+      once every stored vector is unit-norm.
 
       *Done when:* there is a recall@10-vs-`ef_search` curve measured against exact kNN
       on the real corpus. Adding the index is trivial; knowing its recall is the point.

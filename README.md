@@ -10,12 +10,25 @@ nodes have known bugs (see [Known Issues / Review Findings](#known-issues--revie
 Treat this README as a map of *what the code is trying to do*, with the rough edges
 called out honestly.
 
+📍 **Documented at `5d7ac8b` (`Admission Gate Logic`).** The graph has changed twice
+since this README last described it, and both changes are structural:
+
+| Commit | What it did to the graph |
+| --- | --- |
+| `7609df7` `makeFeedbackLoop` | Turned a straight line into a **cycle**. The human's answer at the interrupt now carries an *action* as well as a selection, and `reextract` routes the run back through `topicExtractor` with a rebuilt topic. → [details](#what-the-feedback-loop-commit-changed) |
+| `5d7ac8b` `Admission Gate Logic` | Inserted **`admitTopics`** between `topicExtractor` and the fan-out, and moved the fan-out itself into that node. On a re-extract round it ranks the new subtopics by cosine similarity to the refined centroid and admits only the top 5 — the **first thing in the repo that reads `topicCentroid` back**. → [details](#what-the-admission-gate-commit-changed) |
+
+Between them they also fixed two of the loop bugs this README recorded and left one
+open — see [Known Issues](#the-feedback-loop-and-admission-gate-commits-7609df7--5d7ac8b).
+
 ---
 
 ## Table of Contents
 
 1. [What this repo is](#what-this-repo-is)
 2. [Architecture](#architecture)
+   - [What the feedback-loop commit changed](#what-the-feedback-loop-commit-changed)
+   - [What the admission-gate commit changed](#what-the-admission-gate-commit-changed)
 3. [Repository layout](#repository-layout)
 4. [Data model](#data-model)
 5. [Setup](#setup)
@@ -36,7 +49,8 @@ There are **two generations of code** living side by side:
 | **Legacy — YouTube scraper** | Search YouTube for a list of queries with a pool of persistent Selenium browsers and dump video metadata + comments to JSON. | `ScrapeRun.py` (Click CLI) | `ScrapeRun.py`, `exec/executor.py`, `utils/YouTubeScraper.py` |
 
 The recent commit history (`content extraction && subgraph creation`,
-`fan out extractions`, `Rocchio Relevance`) and the branch
+`fan out extractions`, `Rocchio Relevance`, `makeFeedbackLoop`, `Admission Gate Logic`)
+and the branch
 `reimplement/extraction-langraph` all belong to the **pipeline**. The scraper is
 kept around but is not part of the pipeline's data flow.
 
@@ -52,47 +66,114 @@ map-reduce subgraph. Every stage is a thin **node** that delegates to a **servic
 which does the LLM/HTTP work and persists to **Supabase**.
 
 ```
-                                 ┌──────────────┐
-                        ┌───────►│ topicExtractor│──── expands topic into subtopics (LLM)
-                        │        │  (LLM → topics)│      → writes `topics`, returns topicIds
-                        │        └──────┬────────┘
-   START ──────────────┤               │  fan_out_sources: one Send() per topic id
-                        │               ▼
-                        │        ┌─────────────────────────────────────────────┐
-                        │        │  sourceDiscovery  (subgraph, map-reduce)      │
-                        │        │                                               │
-                        │        │  sourceExtractor ── web-search for sources    │
-                        │        │   (LLM+search → `sources`)                    │
-                        │        │        │  fan_out_runs: one Send() per source │
-                        │        │        ▼                                      │
-                        │        │  runExtractor ── fetch HTML, clean, decompose │
-                        │        │   (curl/browser → trafilatura → LLM →         │
-                        │        │    `extraction_runs`)                         │
-                        │        │        │                                      │
-                        │        │        ▼                                      │
-                        │        │  embedUnits ── batch-embed atomic units,      │
-                        │        │   surface discovered sourceIds (→ pgvector)   │
-                        │        └──────────────────┬──────────────────────────┘
-                        │                           ▼
-                        │        ┌──────────────────────────────────────┐
-                        │        │  feedbackInterrupt (interruptSelections)│──── PAUSES the run;
-                        │        │   interrupt(): user picks relevant      │     human picks which
-                        │        │   source_ids → selected / non-selected  │     sources are relevant
-                        │        └──────────────────┬──────────────────────┘
-                        │                           │
-                        └───────►┌──────────────┐   │
-                                 │  embedTopic   │   │  both branches join here
-                                 │ (topicEmbed)  │   │
-                                 └──────┬───────┘   │
-                                        ▼           ▼
-                                 ┌──────────────────────────────────────┐
-                                 │  centroidEmbedding                    │──── Rocchio: re-centres
-                                 │  (TransformationService, α·q0 +       │     the topic centroid
-                                 │   β·mean(rel) − γ·mean(non-rel))      │     from the feedback
-                                 └──────────────────┬───────────────────┘
-                                                    ▼
-                                                   END
+                    START
+                      │
+                      ├────────────────────────────────────────────┐
+                      ▼                                            ▼
+   ┌───────────────────────────────────────┐    ┌───────────────────────────────────────┐
+   │ topicExtractor                        │    │ embedTopic  (topicEmbed)              │
+   │ expands the topic into subtopics      │    │ q₀ = embed(topicText) using           │
+   │ (LLM) → writes `topics`,              │    │ text-embedding-3-small                │
+   │ returns topicIds                      │    │                                       │
+   └──────────────────┬────────────────────┘    └──────────────────┬────────────────────┘
+                      ▼                                            │
+   ┌───────────────────────────────────────┐                       │
+   │ admitTopics  (admissionGate)          │                       │
+   │ round 1: pass-through.  reextract:    │                       │
+   │ cos(topicCentroid, embed(topic_text)) │                       │
+   │ → keep top 5, mark the rest rejected  │                       │
+   │ Command(goto=[Send(sourceDiscovery)]) │                       │
+   └──────────────────┬────────────────────┘                       │
+    one Send() per admitted topic id                               │
+                      ▼                                            │
+   ┌───────────────────────────────────────┐                       │
+   │ sourceDiscovery (map-reduce subgraph) │                       │
+   │   sourceExtractor → `sources`         │                       │
+   │    fan_out_runs: one Send()/source    │                       │
+   │   runExtractor    → `extraction_runs` │                       │
+   │   embedUnits      → `extracted_units` │                       │
+   │    (+ surfaces sourceIds to state)    │                       │
+   └──────────────────┬────────────────────┘                       │
+                      ▼                                            │
+   ┌───────────────────────────────────────┐                       │
+   │ feedbackInterrupt                     │                       │
+   │ (nodes/interruptSelections.py)        │                       │
+   │ interrupt() PAUSES the run; the human │                       │
+   │ answers {action, selected_ids} → sets │                       │
+   │ userAction / selected / non-selected  │                       │
+   └──────────────────┬────────────────────┘                       │
+                      │                                            │
+                      └─────────────────┬──────────────────────────┘
+                                        ▼   join: centroidEmbedding waits for BOTH branches
+                     ┌──────────────────┴────────────────────┐
+                     │ centroidEmbedding                     │
+                     │ Rocchio:  α·q₀ + β·mean(relevant)     │
+                     │                − γ·mean(non-relevant) │
+                     │ then L2-normalised → topicCentroid    │
+                     └──────────────────┬────────────────────┘
+                                        ▼
+                     ┌──────────────────┴────────────────────┐
+                     │ routeAfterCentroid                    │
+                     │ returns Command(goto=…)               │
+                     └────────┬──────────────────────────┬───┘
+               userAction ==  │                          │  anything else
+                 "reextract"  ▼                          ▼
+           ┌───────────────────────────────────────┐
+           │ reconcileSources                      │    END
+           │ getSourcesbyId(selected sources) →    │
+           │ join their `discovery_reason` prose   │
+           │ → the next round's topicText          │
+           └──────────────────┬────────────────────┘
+                              │
+                              └──►  back to topicExtractor   (the graph's only back-edge)
 ```
+
+### What the feedback-loop commit changed
+
+`7609df7` (`makeFeedbackLoop`) is the first of the two commits that reshaped the graph.
+Before it, `centroidEmbedding` was wired straight to `END`; the run computed one refined
+centroid and stopped. It now ends in a **cycle**:
+
+| | Before `7609df7` | After `7609df7` |
+| --- | --- | --- |
+| Terminal edge | `centroidEmbedding → END` | `centroidEmbedding → routeAfterCentroid`, which returns `Command(goto=…)` |
+| Nodes | 5 top-level | **+2**: `routeAfterCentroid`, `reconcileSources` |
+| Loop edge | — | **`reconcileSources → topicExtractor`** (the only back-edge in the graph) |
+| Resume payload | a comma-separated string or a list of ids | **a JSON object** `{"action": …, "selected_ids": [...]}` |
+| `GlobalState` | — | **+`userAction: str`** — the branch key the router reads |
+| `topicEmbed` | always embeds `topicText` | returns early (no re-embed) when `userAction == "reextract"`, so the refined centroid survives as the next round's `q₀` |
+| Repository | — | **+`getSourcesbyId(source_ids)`** — selects `discovery_reason` for the chosen sources |
+
+The intent: let a human say *"these sources were the right ones — now go again"*, and have
+the next round start from the selected sources' own `discovery_reason` text plus the
+Rocchio-refined centroid. What actually happens today is narrower — see
+[Known Issues](#the-feedback-loop-and-admission-gate-commits-7609df7--5d7ac8b).
+
+### What the admission-gate commit changed
+
+`5d7ac8b` (`Admission Gate Logic`) is the current head of
+`reimplement/extraction-langraph`. It adds one node and moves the fan-out into it:
+
+| | Before `5d7ac8b` | After `5d7ac8b` |
+| --- | --- | --- |
+| Fan-out | `add_conditional_edges("topicExtractor", fan_out_sources, ["sourceDiscovery"])` | `add_edge("topicExtractor", "admitTopics")`; the gate returns `Command(goto=[Send("sourceDiscovery", …)])` |
+| `fan_out_sources` | the fan-out | **dead code** — still defined in `graph.py`, referenced by nothing |
+| Topic filtering | none — every subtopic got a full source-discovery pass | on `reextract`, subtopics are **ranked by `cos(topicCentroid, embed(topic_text))` and cut to the top 5**; the rest are `UPDATE topics SET status='rejected'` |
+| `topicCentroid` | written by `centroidEmbedding`, never read again | **read by the gate** to score the next round's subtopics |
+| Round reset | `"topicIds": []` (a no-op under the `operator.add` reducer) | **`Overwrite([])`** for both `topicIds` and `sourceIds` — the reset now actually resets |
+| Repository | — | **+`getTopicsMetadata(ids)`** (id → `topic_text`) and **+`rejectTopics(ids)`** |
+
+The gate is deliberately inert on the first pass — `if state.get("userAction") !=
+"reextract": return fanOut(state["topicIds"])` — because there is no feedback-refined
+centroid to gate against yet.
+
+The same commit carries fixes outside the graph: `extractionService` had
+`from datetime import time` shadowing the `time` module (now `import time`), skips
+non-HTML/PDF responses by content-type, and runs `build_extraction_input` in a thread;
+`embeddingServices` retries embedding batches with exponential backoff on rate-limit,
+connection, timeout and 5xx errors instead of failing the run; `runExtractor` returns no
+update when a fetch yields nothing; and the topic-extraction prompt now caps its output
+at 5 subtopics.
 
 ### Stage-by-stage (node → service → table)
 
@@ -100,18 +181,33 @@ which does the LLM/HTTP work and persists to **Supabase**.
 | --- | --- | --- | --- | --- |
 | Topic expansion | `nodes/topicExtractor.py` | `services/topicExtractionService.py` | `gpt-4.1-mini` (JSON output) | `topics` |
 | Topic embedding | `nodes/topicEmbed.py` | *(inline OpenAI call)* | `text-embedding-3-small` | *(returns `topicCentroid` to state)* |
+| Topic admission | `nodes/admissionGate.py` | `db.getTopicsMetadata` / `db.rejectTopics` | `text-embedding-3-small` + cosine (numpy) | `topics.status = 'rejected'` for the losers; fans out over the winners |
 | Source discovery | `nodes/sourceExtractor.py` | `services/sourceDiscoveryService.py` | `ChatOpenAI` + `web_search_preview` tool | `sources` |
 | Content extraction | `nodes/runExtractor.py` | `services/extractionService.py` | curl_cffi → SeleniumBase fallback, `trafilatura`, `gpt-4.1-mini` structured output | `extraction_runs` |
 | Unit embedding | `nodes/embedUnits.py` | `services/embeddingServices.py` | `text-embedding-3-small` | `extracted_units` (+ surfaces `sourceIds` to state) |
 | Human feedback | `nodes/interruptSelections.py` | *(LangGraph `interrupt`)* | — (human-in-the-loop) | *(returns `selectedSourceIds` / `nonselectedSourceIds`)* |
 | Centroid refinement | `nodes/centroidEmbedding.py` | `services/transformationService.py` | Rocchio + `getEmbeddedUnits` (pgvector) | *(updates `topicCentroid`)* |
+| Routing | `nodes/routeAfterCentroid.py` | *(none — pure `Command` router)* | — | *(`goto` `reconcileSources` or `END`; clears per-round state)* |
+| Re-extraction seed | `nodes/reconcileSources.py` | `db.getSourcesbyId` | — | *(returns a new `topicText` joined from `discovery_reason`)* |
 
 ### Key concepts
 
-- **Fan-out / map-reduce.** `fan_out_sources` (top graph) and `fan_out_runs`
+- **Fan-out / map-reduce.** `admissionGate` (top graph) and `fan_out_runs`
   (subgraph) use LangGraph `Send` to run one branch per topic / per source in
   parallel. Results are reduced back through `Annotated[list, operator.add]`
-  reducers on the state (e.g. `topicIds`, `extraction_run_ids`).
+  reducers on the state (e.g. `topicIds`, `extraction_run_ids`). Note that the top
+  graph's fan-out moved in `5d7ac8b`: it used to be the `fan_out_sources` function on
+  a conditional edge, and it is now the `goto=[Send(...)]` of the gate's returned
+  `Command`. `fan_out_sources` is still defined in `graph.py` but nothing calls it.
+- **Admission gate (`nodes/admissionGate.py`).** Sits between topic expansion and
+  source discovery and decides *which subtopics are worth spending a discovery pass on*.
+  On the first pass it is a pass-through. On a `reextract` round it loads the new
+  subtopics' `topic_text` (`getTopicsMetadata`), embeds them with
+  `text-embedding-3-small`, scores each against the Rocchio-refined `topicCentroid`
+  with a hand-rolled cosine (`computeSimilarities`, with a `1e-12` zero-norm guard),
+  keeps the **top 5**, and writes `status='rejected'` on the rest before fanning out.
+  This is the point where relevance feedback finally *does* something: before
+  `5d7ac8b`, `topicCentroid` was written and never read.
 - **Atomic units.** `runExtractor` decomposes each source into self-contained
   statements typed as `fact | definition | statistic | claim | opinion`
   (see the prompt in `src/app/prompts/transformation.py`). This is the granularity
@@ -123,10 +219,33 @@ which does the LLM/HTTP work and persists to **Supabase**.
 - **Human-in-the-loop source selection.** After `sourceDiscovery` runs, the
   `feedbackInterrupt` node (`nodes/interruptSelections.py`) calls LangGraph's
   `interrupt()` to **pause the run** and hand the discovered `sourceIds` back to the
-  caller. The human replies with the ids they consider relevant (a comma-separated
-  string or a list); the node partitions them into `selectedSourceIds` /
-  `nonselectedSourceIds`. Because it interrupts, the graph must be run with a
-  **checkpointer** and resumed with a `Command(resume=...)` (see *Running*).
+  caller. Since `7609df7` the resume value is **an object, not a bare list**:
+
+  ```json
+  { "action": "reextract", "selected_ids": ["src-id-1", "src-id-3"] }
+  ```
+
+  A JSON *string* is accepted too (it is `json.loads`-ed first). The node reads
+  `response['action']` into `userAction`, `response['selected_ids']` into
+  `selectedSourceIds`, and puts everything else in `nonselectedSourceIds`. Both keys
+  are read unguarded, so a resume value missing either one raises `KeyError` inside
+  the node. Because it interrupts, the graph must be run with a **checkpointer** and
+  resumed with a `Command(resume=...)` (see *Running*).
+- **The re-extraction loop (`userAction`).** `routeAfterCentroid`
+  (`nodes/routeAfterCentroid.py`) is a pure router: it returns
+  `Command(goto="reconcileSources")` when `userAction == "reextract"` and
+  `Command(goto=END)` otherwise. On the re-extract branch it also clears the
+  round's state (`topicText`, `topicState`, `topicIds`, and both selection lists) in
+  the same `Command(update=...)`. `reconcileSources` then calls
+  `getSourcesbyId(selectedSourceIds or sourceIds)`, joins those rows'
+  `discovery_reason` strings with blank lines, and returns that as the **new
+  `topicText`** — which the back-edge feeds straight into `topicExtractor` for another
+  round. `topicEmbed` short-circuits on `reextract` specifically so the round-2 topic
+  is *not* re-embedded from scratch; the Rocchio-refined centroid is meant to carry
+  over as the next `q₀`.
+  (`5d7ac8b` made the round reset real by switching it to `Overwrite([])`; one thing
+  about this loop still does not behave as written — see
+  [Known Issue #17](#the-feedback-loop-and-admission-gate-commits-7609df7--5d7ac8b).)
 - **Rocchio relevance feedback (now wired in).** `centroidEmbedding`
   (`nodes/centroidEmbedding.py`) feeds the topic centroid and the human's
   selected / non-selected sources to `TransformationService.compute_query_vector`,
@@ -134,8 +253,9 @@ which does the LLM/HTTP work and persists to **Supabase**.
   classic Rocchio query-refinement formula
   (`α·q0 + β·mean(relevant) − γ·mean(non-relevant)`, then L2-normalised) to
   **re-centre `topicCentroid`**. `embedTopic` and `feedbackInterrupt` are both
-  upstream of this node, so it runs once the initial centroid and the feedback are
-  available. As of the latest commit this replaces the earlier "dead code" status:
+  upstream of this node via a single `add_edge([...], "centroidEmbedding")` **join**,
+  so it runs once the initial centroid *and* the feedback are available — and only
+  once (see Known Issue #17). As of that commit this replaces the earlier "dead code" status:
   `transformationService.py` is now a real `TransformationService` class (repo-backed,
   with a `@staticmethod rocchio_embedding` and a divide-by-zero guard).
 
@@ -152,16 +272,20 @@ YouTubeExtraction/
 ├── src/
 │   ├── app/
 │   │   ├── graph/
-│   │   │   ├── graph.py            # Top-level StateGraph (…sourceDiscovery → feedbackInterrupt + embedTopic → centroidEmbedding)
-│   │   │   ├── state.py            # TypedDict states: GlobalState / TopicState / sourceDiscoveryState (+ sourceIds / selected / non-selected)
+│   │   │   ├── graph.py            # Top-level StateGraph — now cyclic (…centroidEmbedding → routeAfterCentroid → reconcileSources ↺ topicExtractor)
+│   │   │   │                        # NB: `fan_out_sources` here is dead since 5d7ac8b — admissionGate owns the fan-out
+│   │   │   ├── state.py            # TypedDict states: GlobalState / TopicState / sourceDiscoveryState (+ userAction / sourceIds / selected / non-selected)
 │   │   │   ├── nodes/              # Thin graph nodes (delegate to services)
 │   │   │   │   ├── topicExtractor.py
-│   │   │   │   ├── topicEmbed.py
+│   │   │   │   ├── admissionGate.py       # cosine gate + Send fan-out            (added 5d7ac8b)
+│   │   │   │   ├── topicEmbed.py          # returns early when userAction == "reextract"
 │   │   │   │   ├── sourceExtractor.py
 │   │   │   │   ├── runExtractor.py
 │   │   │   │   ├── embedUnits.py
 │   │   │   │   ├── centroidEmbedding.py   # Rocchio centroid refinement (now wired in)
-│   │   │   │   └── interruptSelections.py # human-in-the-loop source selection (interrupt)
+│   │   │   │   ├── routeAfterCentroid.py  # Command router: reconcileSources vs END  (added 7609df7)
+│   │   │   │   ├── reconcileSources.py    # rebuilds topicText from discovery_reason (added 7609df7)
+│   │   │   │   └── interruptSelections.py # human-in-the-loop gate: {action, selected_ids}
 │   │   │   └── subgraphs/
 │   │   │       └── sourceDiscovery.py      # map-reduce subgraph: sourceExtractor → runExtractor → embedUnits
 │   │   ├── services/               # Business logic + LLM/HTTP calls
@@ -177,6 +301,8 @@ YouTubeExtraction/
 │
 ├── db/
 │   ├── supabaseRepository.py       # All Supabase CRUD (topics/sources/extraction_runs/extracted_units)
+│   │                               # + getSourcesbyId() — discovery_reason for the loop (added 7609df7)
+│   │                               # + getTopicsMetadata() / rejectTopics() — the gate  (added 5d7ac8b)
 │   └── session.py                  # Lazy singleton repo (init_repo / get_repo)
 │
 ├── supabase/
@@ -213,8 +339,8 @@ topics ──1:N──► sources ──1:N──► extraction_runs ──1:N�
 
 | Table | Key columns | Notes |
 | --- | --- | --- |
-| `topics` | `id`, `topic_text`, `status`, `created_by`, `confidence`, `metadata` (jsonb) | One row per (sub)topic produced by `topicExtractor`. |
-| `sources` | `id`, `topic_id` (FK), `source_type`, `source_url`, `discovery_reason`, `priority_score`, `status` | Web sources discovered per topic. |
+| `topics` | `id`, `topic_text`, `status`, `created_by`, `confidence`, `metadata` (jsonb) | One row per (sub)topic produced by `topicExtractor`. Since `5d7ac8b`, `status` is also written by the graph: subtopics the admission gate does not admit are set to `'rejected'`. |
+| `sources` | `id`, `topic_id` (FK), `source_type`, `source_url`, `discovery_reason`, `priority_score`, `status` | Web sources discovered per topic. Since `7609df7`, `discovery_reason` is load-bearing rather than informational: `getSourcesbyId` reads it back and `reconcileSources` concatenates it into the next round's `topicText`. |
 | `extraction_runs` | `id`, `source_id` (FK), `status`, `confidence`, `metadata` (jsonb) | One run per source fetch/extraction. Atomic units are currently stored **inside `metadata`** as JSON. |
 | `extracted_units` | `id`, `extraction_run_id` (FK), `unit_index`, `semantic_type`, `content`, `confidence`, `embedding vector(1536)` | Individual atomic units + their embeddings. `content` is the unit's `text` — the exact string that was embedded — and `unit_index` is its ordinal in `extraction_runs.metadata`; together with `extraction_run_id` that ordinal is the upsert key. The Rocchio step reads embeddings back via `getEmbeddedUnits`, joining `extracted_units → extraction_runs` on `source_id`. |
 
@@ -287,16 +413,18 @@ LangGraph Studio URL it prints, then invoke the graph with an input containing a
 { "topicText": "quantum error correction" }
 ```
 
-The run will expand the topic into subtopics, discover sources, extract and decompose
-their content, and embed the resulting units — writing to the `topics`, `sources`,
+The run will expand the topic into subtopics, pass them through the admission gate
+(a no-op on the first round), discover sources for each, extract and decompose their
+content, and embed the resulting units — writing to the `topics`, `sources`,
 `extraction_runs`, and `extracted_units` tables as it goes.
 
 #### Human-in-the-loop: the source-selection interrupt
 
 Since the Rocchio commit, the graph **pauses** after source discovery: the
 `feedbackInterrupt` node calls LangGraph's `interrupt()` and returns the discovered
-`sourceIds` to you. You then resume with the ids you consider *relevant*, and the
-`centroidEmbedding` node uses that feedback to re-centre the topic centroid.
+`sourceIds` to you. You then resume with the ids you consider *relevant* **and what you
+want to happen next**, and the `centroidEmbedding` node uses that feedback to re-centre
+the topic centroid.
 
 Because the graph interrupts, it must run with a **checkpointer** and a thread id. In
 LangGraph Studio, the run will surface the `{"type": "topic_selection", "source_ids": [...]}`
@@ -311,10 +439,47 @@ config = {"configurable": {"thread_id": "my-run"}}
 result = await graph.ainvoke({"topicText": "quantum error correction"}, config)
 payload = result["__interrupt__"][0].value          # {"type": "topic_selection", "source_ids": [...]}
 
-# 2) Resume with the relevant source ids (comma-separated string or a list).
-final = await graph.ainvoke(Command(resume="src-id-1, src-id-3"), config)
+# 2) Resume with an object carrying BOTH keys. `action` drives routeAfterCentroid;
+#    anything other than "reextract" ends the run.
+final = await graph.ainvoke(
+    Command(resume={"action": "end", "selected_ids": ["src-id-1", "src-id-3"]}),
+    config,
+)
 # final["topicCentroid"] is now the Rocchio-refined centroid.
 ```
+
+> ⚠️ **The resume contract changed in `7609df7`.** It used to accept
+> `"src-id-1, src-id-3"` (a comma-separated string) or a plain list. Both now fail:
+> a string is parsed with `json.loads`, and the node indexes `response['action']` and
+> `response['selected_ids']`. Passing the old shape raises `JSONDecodeError` /
+> `TypeError` inside `feedbackInterrupt`.
+
+#### Asking for another round (`action: "reextract"`)
+
+Resume with `"action": "reextract"` and the graph does not stop at `END`. Instead
+`routeAfterCentroid` sends it to `reconcileSources`, which rebuilds `topicText` from the
+`discovery_reason` of the sources you selected and loops back into `topicExtractor`:
+
+```python
+final = await graph.ainvoke(
+    Command(resume={"action": "reextract", "selected_ids": ["src-id-1"]}),
+    config,
+)
+# The run does NOT finish here: it expands the rebuilt topic, passes the new
+# subtopics through the admission gate, discovers sources for the admitted ones,
+# and pauses at a second `topic_selection` interrupt.
+assert "__interrupt__" in final
+```
+
+This is the round where the refined centroid earns its keep: `admitTopics` scores each
+new subtopic against it and drops all but the top 5, marking the others `rejected` in
+`topics`. Watch the `gate scores: [...]` line it logs to see the ranking.
+
+> **One cycle only.** The second interrupt is effectively the end of the run: whatever
+> you answer, the graph halts after `feedbackInterrupt` and never reaches
+> `centroidEmbedding` again. This is Known Issue #17 — the `[embedTopic,
+> feedbackInterrupt] → centroidEmbedding` join never re-arms, because `embedTopic` is
+> only reachable from `START`.
 
 > Note: `graph.compile()` in `graph.py` does **not** attach a checkpointer, so the
 > interrupt only survives when the graph is served by a runtime that supplies one
@@ -339,6 +504,14 @@ Tests use `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`,
 uv run pytest -p no:seleniumbase -p no:sb_pytest -p no:html tests/ -v
 ```
 
+**Current result at `5d7ac8b`: 19 passed, 10 failed** (excluding the legacy scraper's
+`tests/execdata.py` and `tests/integration/test_topicExtractor.py`, which need live
+services). Five of those failures pre-date the feedback-loop commit (Known Issue #13);
+the other five are that commit's own regression (#18) — the tests below still describe
+the pre-`7609df7` interrupt contract. `5d7ac8b` neither fixed nor broke any test, and
+added none: `admissionGate` — the only node with real logic of its own (cosine scoring,
+a top-K cut, a DB write on the rejected set) — has **no test coverage at all**.
+
 ### Existing suites
 
 | Suite | State |
@@ -358,13 +531,24 @@ Supabase or OpenAI — and all pass under the command above):
 | `tests/unit/test_transformation_service.py` | `rocchio_embedding` math (α/β/γ terms, normalisation, zero-vector guard, list output) and `compute_query_vector` (fetches both selections, skips the repo on empty id lists). |
 | `tests/unit/test_get_embedded_units.py` | `SupabaseRepository.getEmbeddedUnits` — the `extracted_units ⋈ extraction_runs` filter and JSON→list embedding decode, against a fake client chain. |
 | `tests/node/test_topic_embed.py` | `topicEmbed` now uses `text-embedding-3-small` and returns `topicCentroid` (the two bugs the commit fixed). |
-| `tests/node/test_interrupt_selections.py` | `interruptSelections` — string vs list resume input, selected/non-selected partition, and the interrupt payload shape. |
+| `tests/node/test_interrupt_selections.py` | **⚠️ Broken by `7609df7` (4/4 failing).** Written against the old contract: the node is now `async` and expects `{"action", "selected_ids"}`, so calling it synchronously with `"a, c"` / `["b"]` yields `TypeError: 'coroutine' object is not subscriptable`. Needs `await` + the new payload, plus a case for `userAction`. |
 | `tests/node/test_centroid_embedding.py` | `centroidEmbedding` wires the repo + `TransformationService` and writes the refined centroid back to state. |
-| `tests/integration/test_feedback_loop.py` | Drives `feedbackInterrupt → centroidEmbedding` in a real `StateGraph` with a `MemorySaver` checkpointer: invoke → pause at interrupt → `Command(resume=...)` → recomputed centroid. |
+| `tests/integration/test_feedback_loop.py` | **⚠️ Broken by `7609df7` (1/1 failing).** Same cause: it resumes with `Command(resume="s1, s3")`, which now hits `json.loads` and raises `JSONDecodeError`. The graph shape it builds (`feedbackInterrupt → centroidEmbedding → END`) also predates `routeAfterCentroid` / `reconcileSources`. |
 | `tests/conftest.py` | Sets a dummy `OPENAI_API_KEY` so modules that build an `AsyncOpenAI()` at import time (e.g. `topicEmbed`) can be collected. |
 
 ### Still needed
 
+- **Repair the two suites `7609df7` broke** (Known Issue #18): `await` the now-async
+  `interruptSelections`, resume with `{"action", "selected_ids"}`, and assert the
+  `userAction` it writes.
+- **Cover the loop and the gate.** Nothing exercises `routeAfterCentroid`,
+  `reconcileSources`, or `admissionGate`. Worth adding: `computeSimilarities` against
+  hand-computed cosines (including the zero-norm guard); that the gate is a
+  pass-through when `userAction != "reextract"`; that it rejects exactly the
+  non-admitted ids; the router's two branches; that `reconcileSources` falls back to
+  `sourceIds` when `selectedSourceIds` is empty; and a full-topology cycle test
+  asserting how many rounds actually run (Known Issues #15–#17 and #19 were all found
+  that way — a stubbed copy of `graph.py`'s wiring under a `MemorySaver`).
 - **Rewrite `tests/node/test_embed_units.py`** to the node's current contract once
   its return shape is settled (see Known Issue #13).
 - **A live integration test for `getEmbeddedUnits`** against a seeded local Supabase
@@ -388,7 +572,9 @@ Supabase or OpenAI — and all pass under the command above):
 These were found while parsing the code and are documented here so they're visible.
 The **Rocchio commit** (`feat: implement Rocchio relevance feedback for topic
 embeddings`) fixed several of the items below (marked ✅) and introduced one new
-regression (#13). The remaining items are still open.
+regression (#13). The **feedback-loop commit** (`7609df7`) added four more (#15–#18),
+two of which the **admission-gate commit** (`5d7ac8b`) has since fixed. The remaining
+items are still open at `5d7ac8b`.
 
 ### Correctness bugs (pipeline)
 
@@ -459,6 +645,109 @@ regression (#13). The remaining items are still open.
     Decide the intended contract (likely: return a partial `{"sourceIds": [...]}` and
     read source ids from wherever they're actually populated), then rewrite the node's
     tests to match.
+
+### The feedback-loop and admission-gate commits (`7609df7` / `5d7ac8b`)
+
+Items #15–#17 and #19 were confirmed by replaying `graph.py`'s exact wiring (same nodes,
+same edges, stub bodies) under a `MemorySaver` and streaming the node updates, once per
+commit.
+
+15. ✅ **Fixed in `5d7ac8b` — `routeAfterCentroid`'s reset of `topicIds` was a no-op, so
+    old topics were re-processed every round.** The router used to clear the round with
+
+    ```python
+    update={"topicText": "", "topicState": None, "topicIds": [], ...}
+    ```
+
+    but `GlobalState.topicIds` is `Annotated[List[str], operator.add]`, and a reducer
+    channel *merges* an update instead of replacing it — `[]` reduced to `existing + []`,
+    so the list survived. Round 2 fanned out over round 1's topic ids **and** the new
+    ones (observed `topicIds == ['t1', 't2']` after the reset, with `sourceDiscovery`
+    re-running for `t1`), re-extracting at full LLM/fetch cost. `5d7ac8b` wraps both
+    accumulating keys in LangGraph's `Overwrite` sentinel:
+
+    ```python
+    update={"topicText": "", "topicState": None,
+            "topicIds": Overwrite([]), "sourceIds": Overwrite([])}
+    ```
+
+    Re-running the probe against the current wiring shows round 2 starting clean:
+    `topicIds == ['r2-t1' … 'r2-t5']`, no round-1 ids.
+
+16. ✅ **Fixed in `5d7ac8b` — `sourceIds` was never reset and accumulated duplicates.**
+    It is also `Annotated[..., operator.add]` and was *not* in the router's update at
+    all, so ids piled up across rounds — and because of #15 the same source was
+    re-discovered and appended again (observed round-2 interrupt payload:
+    `{'source_ids': ['s-t1', 's-t1', 's-t2']}`). That fed duplicates to the human, and
+    `nonselectedSourceIds` — built as `[s for s in sourceIds if s not in selected]` —
+    inherited them, so Rocchio's `mean(non-relevant)` double-counted those units.
+    `Overwrite([])` on `sourceIds` fixes it; round 2 now surfaces only its own sources.
+
+17. **The loop can only run once — the second round's feedback is silently
+    discarded.** `graph.py` joins two branches into one node:
+
+    ```python
+    builder.add_edge(["embedTopic", "feedbackInterrupt"], "centroidEmbedding")
+    ```
+
+    (unchanged in `5d7ac8b`). A multi-source `add_edge` compiles to a barrier that
+    fires only when **every** named node has written. `embedTopic` is reachable only from `START`, so it writes
+    exactly once. On the second cycle `feedbackInterrupt` writes, the barrier stays
+    half-filled, and `centroidEmbedding` — and therefore `routeAfterCentroid` — never
+    runs again. The run just stops after the second interrupt: answering
+    `{"action": "reextract"}` a second time changes nothing, and no second Rocchio
+    refinement happens — and since `5d7ac8b`, the admission gate is starved with it:
+    round 3's subtopics would be the first the gate could rank against a
+    twice-refined centroid. Observed on both commits: after resuming the round-2
+    interrupt, the only node update is `feedbackInterrupt` and `state.next == ()`.
+    *Fix:* route the initial-centroid branch into the cycle (e.g. `embedTopic →
+    topicExtractor` before the fan-out) or drop the join and have `centroidEmbedding`
+    read `topicCentroid` from state, which is where it already lives.
+
+    Related: `topicEmbed`'s `if state.get('userAction') == 'reextract': return state`
+    guard is currently unreachable for the same reason — `embedTopic` never runs a
+    second time. It is the right guard for the fixed wiring, not for today's.
+
+18. **The resume-payload change broke 5 tests.** Making `interruptSelections` async
+    and switching its input from *ids* to `{"action", "selected_ids"}` invalidated
+    `tests/node/test_interrupt_selections.py` (4 tests) and
+    `tests/integration/test_feedback_loop.py` (1). See *Testing*. The payload is also
+    read unguarded — a resume value missing either key raises `KeyError` from inside
+    the node, which surfaces as a graph-execution error rather than a re-prompt.
+
+19. **The gate's top-5 cut and the extractor's 5-topic cap cancel out.** The same
+    commit that added `admitted = [id for id, _ in ranked[:5]]` also changed the
+    topic-extraction prompt to `CAP IT TO A MAXIMUM OF 5`. When the LLM honours that
+    cap the gate ranks 5 candidates and admits all 5, so it rejects nothing and the
+    cosine scoring is pure overhead — the behaviour is only observable when the model
+    overshoots. Whichever number is meant to be the real filter, the two should not be
+    equal (and the cut is a hard-coded literal, not a threshold on the scores the gate
+    just computed — a `τ` on similarity with a min-K floor would make it do the job its
+    own docstring implies).
+
+20. **The gate's repository calls are unguarded.** `getTopicsMetadata` raises
+    `ValueError` if *any* requested id is missing rather than skipping it, and its
+    return annotation says `List[dict]` while it returns a `dict`. `rejectTopics`
+    ignores the response entirely, so a failed update is silent, and it is called with
+    `set(topicIds) - set(admitted)` — an empty set on the common path, which still
+    issues an `UPDATE … WHERE id IN ()`.
+
+Not a regression, but worth recording next to them:
+
+- **`reconcileSources` re-seeds the loop with prose, not vectors.** It rebuilds
+  `topicText` by joining the selected sources' `discovery_reason` strings — the LLM's
+  own justification for picking each source, not the extracted content. The refined
+  `topicCentroid` now has exactly one consumer (the admission gate, which scores
+  *topics*); nothing retrieves against the embedded units, and `extracted_units.embedding`
+  still has no index. `ROADMAP.md` at this commit is a spec for a separate `Graph.md`
+  document rather than the tiered plan it held at `6904353`, and it predates `5d7ac8b`
+  — it still describes the admission gate as unbuilt.
+- **`getSourcesbyId` raises on an empty result.** `reconcileSources` passes
+  `selectedSourceIds or sourceIds`; if the human selects nothing *and* the fallback is
+  empty, the repository raises `ValueError("Data could not be fetched")` mid-graph.
+- **Debug `print()`s in graph nodes.** `routeAfterCentroid` prints `userAction:` and
+  `interruptSelections` prints the raw resume value on every run. Should be the
+  project's logger, or removed.
 
 ### Configuration & tooling
 

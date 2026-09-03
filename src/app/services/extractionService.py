@@ -1,5 +1,5 @@
 import asyncio
-from datetime import time
+import time
 import json
 import logging
 from typing import Literal
@@ -103,8 +103,11 @@ class extractionService:
 
     async def extract(self) -> dict:
         html = await self.sourceHTML()
-
-        metadata = self.build_extraction_input(html, self.source_url)
+        if not html:
+            return None
+        metadata = await asyncio.to_thread(
+            self.build_extraction_input, html, self.source_url
+            )
 
         unit_rows = await self._make_atomic_units(metadata)
         
@@ -148,6 +151,12 @@ class extractionService:
                     },
                 )
                 resp.raise_for_status()
+                ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+                if ctype not in ("text/html", "application/xhtml+xml"):
+                    logger.warning("Skipping %s: content-type %s", self.source_url, ctype)
+                    return None
+                if resp.content[:5] == b"%PDF-":
+                    return None
                 return resp.text
         except Exception as e:
             logger.warning("curl_cffi fetch failed for %s: %s", self.source_url, e)

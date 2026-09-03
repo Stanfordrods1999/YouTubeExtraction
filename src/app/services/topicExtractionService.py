@@ -18,7 +18,7 @@ class topicExtractionService:
     async def extract(self, state: TopicState) -> list[tuple[str, str]]:
         raw_topics:List[TopicState] = await self._run_extraction_chain(state["topicText"])
         saved = await self.repo.createTopic(raw_topics)
-        return saved ## Will return bunch of ids
+        return saved
 
     async def _run_extraction_chain(self, topic: str) -> List[TopicState]:
         prompt = ChatPromptTemplate.from_messages([
@@ -35,7 +35,9 @@ class topicExtractionService:
                  "metadata": {{}}
                }}
              ]
-             Return ONLY the JSON array, no extra text."""),
+
+             
+             Return ONLY the JSON array, no extra text, CAP IT TO A MAXIMUM OF 5"""),
             ("human", "Extract related topics for: {topic}")
         ])
 

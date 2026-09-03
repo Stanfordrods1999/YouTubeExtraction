@@ -2,7 +2,7 @@ import json
 import os
 
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Set
 from supabase import AsyncClient, create_async_client
 
 from src.app.graph.state import TopicState, sourceDiscoveryState
@@ -28,7 +28,7 @@ class SupabaseRepository:
             .table("topics")
             .select("*")
             .eq("id", id)
-            .single()
+            .maybe_single()
             .execute()
         )
 
@@ -36,7 +36,36 @@ class SupabaseRepository:
             raise ValueError(f"Topic {id} not found")
 
         return response.data
+
+    async def rejectTopics(self,ids:Set[str]):
+        response = await (
+            self.client.table('topics').update({
+                'status':'rejected'
+            }).in_('id',list(ids)).execute()
+        )
+        
     
+    async def getTopicsMetadata(self, ids: List[str]) -> List[dict]:
+        if not ids:
+            return []
+
+        response = await (
+            self.client
+            .table("topics")
+            .select("*")
+            .in_("id", ids)
+            .execute()
+        )
+
+        rows = response.data or []
+
+        missing = set(ids) - {row["id"] for row in rows}
+        if missing:
+            raise ValueError(f"Topics not found: {sorted(missing)}")
+
+        byId = {row["id"]: row["topic_text"] for row in rows}
+        return byId
+        
     async def createTopic(self, data: List[TopicState]) -> list[str]:
         rows = [
             {

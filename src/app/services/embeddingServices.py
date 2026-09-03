@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, RateLimitError, APIStatusError
 
 from db.supabaseRepository import SupabaseRepository
 
@@ -7,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 EMBED_MODEL = "text-embedding-3-small"   
 BATCH_SIZE = 512
+MAX_ATTEMPTS = 4
 
 class embeddingService:
     def __init__(self,repo:SupabaseRepository,e_run_id:str):
@@ -25,7 +27,34 @@ class embeddingService:
             batch = rows[offset : offset + BATCH_SIZE]
             texts = [r["text"] for r in batch]
 
-            resp = await self.client.embeddings.create(model=EMBED_MODEL, input=texts)
+            resp = None
+            for attempt in range(MAX_ATTEMPTS):
+                try:
+                    resp = await self.client.embeddings.create(
+                        model=EMBED_MODEL, input=texts, timeout=60
+                    )
+                    break
+                except (RateLimitError, APIConnectionError, APITimeoutError) as e:
+                    if attempt == MAX_ATTEMPTS - 1:
+                        logger.error(
+                            "Embedding failed after %d attempts at offset %d: %s",
+                            MAX_ATTEMPTS, offset, e,
+                        )
+                    else:
+                        await asyncio.sleep(2 ** attempt)
+                except APIStatusError as e:
+                    if e.status_code >= 500 and attempt < MAX_ATTEMPTS - 1:
+                        await asyncio.sleep(2 ** attempt)
+                    else:
+                        logger.error(
+                            "Embedding rejected (%s) at offset %d: %s",
+                            e.status_code, offset, e,
+                        )
+                        break
+
+            if resp is None:
+                logger.error("Skipping batch at offset %d for run %s", offset, self.e_run_id)
+                continue
 
             # The API documents `index` precisely because the order of `data` is
             # not guaranteed to match the order of `input`. Sorting by it is what

@@ -1,7 +1,7 @@
 from typing import Literal
 
 from langgraph.graph import END, START
-from langgraph.types import Command
+from langgraph.types import Command, Overwrite
 
 from src.app.graph.state import GlobalState
 
@@ -16,9 +16,8 @@ async def route_after_centroid(
             update={
                 "topicText": "",
                 "topicState": None,
-                "topicIds": [],
-                "selectedSourceIds": None,
-                "nonselectedSourceIds": None,
+                "topicIds": Overwrite([]),
+                "sourceIds": Overwrite([]),
             },
         )
     return Command(goto=END)

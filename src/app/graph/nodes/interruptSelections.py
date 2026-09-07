@@ -8,11 +8,11 @@ async def interruptSelections(state: GlobalState) -> dict:
         "source_ids": state["sourceIds"],
     })
 
-    print(repr(response)) 
-
     if isinstance(response, str):          
         response = json.loads(response)
     
+    print(repr(response)) 
+
     decision = response['action']
     selected = response['selected_ids']
 

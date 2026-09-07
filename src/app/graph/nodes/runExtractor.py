@@ -7,6 +7,8 @@ async def runExtractor(state: extractionState):
         state['topic_id'], state['source_url'], state['source_id'], get_repo()
     ).extract()
 
-    return {"extraction_run_ids":[metadata[0]["id"]]}    
-
-    
+    if metadata is None:
+        return 
+    return {
+        "extraction_run_ids":[metadata[0]["id"]]
+        }

@@ -9,7 +9,7 @@ class TopicState(TypedDict):
     createdBy:NotRequired[str]
     confidence:NotRequired[float]
     createdAt:NotRequired[datetime]
-    metadata:NotRequired[Dict[str,any]]
+    metadata:NotRequired[Dict[str,Any]]
     
 class sourceDiscoveryState(TypedDict):
     topic_id:str

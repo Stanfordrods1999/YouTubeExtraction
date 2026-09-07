@@ -59,7 +59,7 @@ s
         }}
 
         Rules:
-        - Return between 5 and 15 sources.
+        - Return between 5 and 10 sources.
         - priority_score must be between 0 and 1.
         - source_url must be a valid URL.
         - discovery_reason should be concise (1-2 sentences).

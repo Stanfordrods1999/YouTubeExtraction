@@ -61,8 +61,12 @@ Given `topicText`, one round of the pipeline:
    duplicates.
 7. **Pauses** at a LangGraph `interrupt()` and asks a human which sources were relevant.
 8. **Refines** the topic vector from that judgement:
-   `q′ = norm(α·q₀ + β·mean(relevant) − γ·mean(non-relevant))`, with
-   `α=1.0, β=0.75, γ=0.15`.
+   `qₜ₊₁ = norm(α·qₜ + β·mean(relevant) − γ·mean(non-relevant))`, with
+   `α=1.0, β=0.75, γ=0.15`. Note `qₜ`, not `q₀`: on a re-extract round the input is
+   the *previous round's refined centroid*, because `topicEmbed` returns early on
+   `reextract` rather than re-embedding the rebuilt `topicText`. The loop is iterative
+   Rocchio. (`TransformationService.compute_query_vector` names the parameter `q0`,
+   which is accurate only on the first round.)
 9. Either **ends**, or loops back through `reconcileSources` for another round.
 
 Two things it does *not* do yet: retrieve anything by vector similarity over the units
@@ -99,7 +103,7 @@ flowchart TD
     SDG --> FI["feedbackInterrupt<br/><i>interrupt: which sources were relevant?</i>"]
 
     ET ==> CE
-    FI ==> CE["centroidEmbedding<br/><i>Rocchio: α·q₀ + β·mean R − γ·mean N</i>"]
+    FI ==> CE["centroidEmbedding<br/><i>Rocchio: α·qₜ + β·mean R − γ·mean N</i>"]
 
     CE --> RC{"routeAfterCentroid"}
     RC -->|"userAction == reextract"| RS["reconcileSources<br/><i>next round's topicText,<br/>from discovery_reason prose</i>"]
@@ -139,7 +143,7 @@ Three things the picture is hiding:
 | Content extraction | `runExtractor` | `extractionService` | `curl_cffi` → SeleniumBase, `trafilatura`, `gpt-4.1-mini` structured output | `extraction_runs` |
 | Unit embedding | `embedUnits` | `embeddingService` | `text-embedding-3-small`, batches of 512 | `extracted_units` |
 | Human feedback | `feedbackInterrupt` | *(LangGraph `interrupt`)* | — | → `selectedSourceIds` / `nonselectedSourceIds` |
-| Centroid refinement | `centroidEmbedding` | `TransformationService` | Rocchio over `getEmbeddedUnits` | → `topicCentroid` |
+| Centroid refinement | `centroidEmbedding` | `TransformationService` | Rocchio over `getEmbeddedUnits`; `qₜ` is the running centroid | → `topicCentroid` |
 | Routing | `routeAfterCentroid` | — | — | `Command(goto=…)` |
 | Re-seed | `reconcileSources` | — | `getSourcesbyId` | → `topicText` |
 
@@ -200,7 +204,7 @@ which is what makes each round start clean.
 | Channel | Type | Written by |
 | --- | --- | --- |
 | `topicText` | `str` | caller, then `reconcileSources` |
-| `topicCentroid` | `list[float]` (1536) | `embedTopic`, then `centroidEmbedding` |
+| `topicCentroid` | `list[float]` (1536) | `embedTopic` (round 1 only — it returns early on `reextract`), then `centroidEmbedding` each round |
 | `topicIds` | `Annotated[list[str], operator.add]` | `topicExtractor` (append), `admissionGate` (`Overwrite`), `routeAfterCentroid` (`Overwrite([])`) |
 | `sourceIds` | `Annotated[list[str], operator.add]` | `embedUnits` via the subgraph's output schema; reset by `routeAfterCentroid` (`Overwrite([])`) |
 | `userAction` | `str` | `interruptSelections` |
@@ -467,13 +471,38 @@ embedTopic → topicExtractor(1) → admitTopics → sourceDiscovery ×5 → fee
       ↳ resume(reextract) → (nothing; state.next == ())
 ```
 
-So there is exactly one Rocchio refinement per thread, and the admission gate is starved
-with it — round 3's subtopics would be the first it could rank against a twice-refined
-centroid. `topicEmbed`'s `if state.get('userAction') == 'reextract': return state` guard
-is unreachable for the same reason: it is the right guard for the fixed wiring, not for
-today's. *Fix:* route the initial-centroid branch into the cycle (e.g.
-`embedTopic → topicExtractor`), or drop the join and let `centroidEmbedding` depend on
-`feedbackInterrupt` alone — it already reads `topicCentroid` from state.
+So there is exactly one Rocchio refinement per thread (`q₀` is the only vector Rocchio
+ever sees), and the admission gate is starved with it — round 2's gate ranks against the
+once-refined centroid, and round 3's subtopics would be the first it could rank against a
+twice-refined one.
+
+**What the loop is meant to do.** `topicEmbed`'s
+`if state.get('userAction') == 'reextract': return state` guard is unreachable today for
+the same reason, but it is the load-bearing piece of the intended design: it stops the
+rebuilt `topicText` from being re-embedded over the refined vector, so round `t+1` feeds
+Rocchio the **previous round's refined centroid** rather than a fresh `q₀`. The loop is
+iterative Rocchio, `qₜ₊₁ = norm(α·qₜ + β·mean(Rₜ) − γ·mean(Nₜ))`.
+
+*Fix:* either works, and both were verified against the real node bodies with only the
+leaf services faked:
+
+| Wiring | Rocchio runs over 4 invocations | `qₜ` handed to Rocchio |
+| --- | --- | --- |
+| as built | **1** — `next=()` after the second interrupt | `[q₀]` |
+| **A** — drop the join: `feedbackInterrupt → centroidEmbedding` | 3 | `q₀ → q₁ → q₂` |
+| **B** — put `embedTopic` in the cycle: `reconcileSources → embedTopic → topicExtractor` | 3 | `q₀ → q₁ → q₂` |
+
+A is one line and makes `centroidEmbedding` depend on the channel it already reads
+(`topicCentroid` lives in state). B keeps the join honest and makes the guard do real
+work; it does not duplicate `topicIds`, because `routeAfterCentroid` has already
+`Overwrite([])`-ed the channel by the time `embedTopic` re-emits state.
+
+**Worth deciding before you fix it:** with `α = 1.0` and a renormalisation every round,
+nothing anchors the query to the original topic — `q₀`'s contribution decays
+geometrically as feedback accumulates, which is textbook query drift. Keeping the anchor
+separate from the running query (`qₜ₊₁ = norm(α·q₀ + δ·qₜ + β·mean(Rₜ) − γ·mean(Nₜ))`,
+with an alarm on `cos(qₜ, q₀) < τ`) is the standard remedy, and it only matters once the
+loop can actually turn more than once.
 
 **2. The gate's top-5 cut and the extractor's 5-topic cap cancel out.**
 `admissionGate` keeps `ranked[:5]` while the topic-extraction prompt ends with
